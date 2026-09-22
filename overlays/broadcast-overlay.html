@@ -1,0 +1,1157 @@
+<!--
+  iRacing auto-broadcaster :: timing tower overlay
+
+  This file is BOTH the OBS browser source and the design artifact, so it is
+  written as page content only (no <html>/<head>/<body> wrappers).
+
+  - Open as-is  -> cinematic preview with mock multiclass data (what you see now).
+  - Add ?ws=URL -> render from a live model streamed over a WebSocket.
+  - Add ?live    -> hides the preview backdrop + note and goes transparent,
+                    for use as an OBS Browser Source over gameplay.
+
+  Everything renders from render(model). The model shape is documented above
+  render(); the mock engine and the WebSocket feed both build that same shape.
+-->
+<style>
+  /* A country flag is a regional-indicator PAIR, and whether it draws as a flag or as
+     two letters is decided entirely by the system emoji font. Linux has Noto Color
+     Emoji and does the right thing. Windows ships Segoe UI Emoji, which has never
+     carried flag glyphs, so on the sim rig the tower would read "GB" and "US" as
+     letter pairs. Carrying our own subset settles it identically on both.
+
+     Subset from Noto Color Emoji, 788K: the 26 regional indicators, the waving black
+     flag and the tag characters, plus every ligature that turns a pair into a flag:
+     264 of them, including the tag sequences for the UK home nations that flair.py
+     goes out of its way to support. Subsetting by codepoint ALONE silently drops
+     those ligatures and leaves you with letters, which is the whole bug again; the
+     layout features have to be retained explicitly.
+
+     font-display: block, not swap, because here the fallback IS the bug: better a
+     few blank milliseconds than flashing letter pairs before the flag lands. It is
+     served off localhost, so that wait is not real. */
+  @font-face {
+    font-family: "IRB Flags";
+    src: url("brand/flags.woff2") format("woff2");
+    font-display: block;
+  }
+
+  :root {
+    --font-cond: "Bahnschrift", "DIN Alternate", "DIN Condensed", "Oswald",
+      "Roboto Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+
+    /* ================= BRAND =================
+       SET AT RUNTIME. overlay.js reads look.colour from /show.json and writes
+       all three of these, so an operator picks ONE colour in the settings and
+       never opens this file. What is here is the default a tower draws with
+       before that lands, and on a machine where nothing is configured.
+
+       THREE roles, because one colour cannot do all three:
+
+       --brand       fills and rules: the cap spine, the caption edge, the
+                     source colour every hairline is mixed from.
+       --brand-lift  brand-coloured TYPE. A saturated brand at 10px, white-on-
+                     glass, usually fails contrast; the lift is the same hue
+                     mixed toward white until it does not. Anything brand-
+                     coloured and smaller than about 40px takes this.
+       --brand-deep  the shadow side, for the backdrop wash.
+
+       Everything warm below is mixed from these, so a re-skin really is one
+       value. The defaults are a cyan that reads on both dark and bright video
+       and belongs to nobody, which is the right starting point for a product
+       whose users all have their own colours. */
+    --brand: #38BDF8;
+    --brand-lift: #7DD3FC;
+    --brand-deep: #0369A1;
+
+    /* ================= CHROME =================
+       Cool near-blacks, built down from an ink of #0A0D14, which is also what
+       the circuit artwork in tracks/ is drawn on, so an outline composites onto
+       this chrome instead of sitting on a second, similar black.
+
+       Deliberately NOT tinted with the brand: these have to hold up under any
+       colour an operator picks, and a chrome warmed for one hue looks dirty
+       under another. A cool base also keeps distance from --flag-yellow.
+
+       Every hairline IS brand-tinted, which is where most of a re-skin is
+       actually visible: it recolours every panel edge in the package at once. */
+    --glass: rgba(12, 15, 23, 0.86);
+    --glass-hi: rgba(22, 27, 38, 0.92);
+    --row: rgba(15, 19, 28, 0.74);
+    --row-alt: rgba(21, 26, 36, 0.74);
+    --line: color-mix(in srgb, var(--brand) 18%, transparent);
+    --line-soft: rgba(255, 255, 255, 0.06);   /* row rules: below brand-tint visibility */
+    --chip: color-mix(in srgb, var(--brand) 7%, transparent);
+    --well: #232a38;        /* the sunken plate behind a position number */
+
+    /* --ink is a bone #F3F4F6 and --muted is #9CA3AF, the grey the circuit
+       artwork already uses for its secondary marks, so the type on a holding
+       card and the type on the tower are the same two colours rather than two
+       near-misses.
+
+       --muted carries 9-10px letterspaced uppercase over video and measures
+       7.66:1 against the tower, up from the warm set's 7.08:1, so the swap
+       costs no legibility. --dim is deliberately recessive ("+3 more cars",
+       an unknown class bar), and is not asked to be readable at a glance. */
+    --ink: #f3f4f6;
+    --ink-soft: #cbd2dc;    /* secondary text that still has to read over video */
+    --muted: #9ca3af;
+    --dim: #5f6875;
+
+    /* ================= SEMANTIC =================
+       NOT decoration, and NOT available for branding. Flags mean what flags
+       mean, and purple means fastest lap everywhere in motorsport.
+
+       --accent stays cool on purpose. It marks the leader, the on-camera car
+       and a live battle ("what the broadcast is pointing at"), and that
+       signal has to be unmistakable against a flag. This mattered when the
+       brand was amber sitting beside --flag-yellow, and it matters MORE now
+       that it is crimson sitting beside --flag-red: cyan was doing real work by
+       being nothing like a flag, so it keeps doing it, and the brand takes the
+       chrome instead. (Issue #9, option 1.)
+
+       Which puts the whole weight of "brand is not a flag" on the brand never
+       filling anything a viewer could read as track state. The two places it
+       comes closest are both deliberate and both noted where they are set:
+       .cap's 2px top rule, which is a horizontal spine along the package while
+       .cap__flag is a vertical bar (different axis, different shape), and
+       .rpy__what, which takes --brand-lift rather than --brand precisely
+       because it is the one piece of brand type INSIDE a red-edged frame.
+
+       Keeping accent put has a second payoff: every color-mix() below was
+       tuned against this cyan and still lands where it did. */
+    --accent: #35e3ff;      /* live state: leader, on-camera, battle */
+    --flag-green: #2fd46b;
+    --flag-yellow: #ffcf2e;
+    --flag-red: #ff4d4d;
+    --flag-checkered: #e9ecf2;
+    /* The white flag: one lap to go. Pure white against --flag-checkered's off-white,
+       which is as far apart as those two can be while both staying the flag they are,
+       so the 8px bar is NOT what distinguishes them. The cap says "LAST LAP" in words
+       beside it, and that is the part a viewer reads. See .cap.is-last-lap. */
+    --flag-white: #ffffff;
+    --fast: #b98cff;        /* fastest lap */
+    /* The meatball flag is a black flag with an ORANGE DISC, and it must not read as
+       caution: it is an order to one car, not a state of the track. Orange rather than
+       --flag-yellow for exactly that reason, and far enough from it to tell apart on a
+       stream. */
+    --flag-orange: #ff8b2e;
+    --on-accent: #04161b;   /* text on an accent-filled chip */
+    --on-bright: #14110a;   /* text on any bright semantic chip (yellow, class) */
+
+    --rowH: 42px;
+    /* The tower BODY: position, number, driver, gap. It was 400 when every row also
+       carried a class badge, a licence chip and an iRating; dropping those three (see
+       the .row grid) bought back 146px, and the tower gave the frame all of it back
+       rather than spending it on wider columns. Body plus outrigger is 320: one sixth
+       of a 1920 frame, against 400 for the body alone before. */
+    --towerW: 258px;
+    /* The outrigger: a secondary column hung off the right of the tower body, carrying
+       PIT or the car's last lap. It exists so the GAP column can always show a gap:
+       a pit stop is exactly when positions change and the viewer most wants the number,
+       and PIT used to overwrite it. Sized for "2:15.482" (the widest thing it prints,
+       and a real Spa lap) in tabular condensed digits, with a little air. */
+    --outrigW: 62px;
+    /* The outrigger is SECONDARY: position, number, driver and gap stay dominant.
+       A flat translucent black rather than a colour, so it darkens the leader row,
+       the on-cam row and both alternating row tints by the same amount. */
+    --outrig-bg: rgba(0, 0, 0, 0.24);
+    /* MAXIMA, not fixed sizes. The rows inside both boxes are absolutely positioned and
+       so contribute no height of their own, which is why the boxes are told how tall to
+       be. render() shadows both of these on .tower with the counts the CURRENT FIELD
+       actually needs (min(cap, cars)), so an 11-car practice session does not leave half
+       a tower of empty glass hanging under the last row. These are also the values the
+       scroll maths reads (see ROW_H/PINNED/WINDOW in the script): one copy of each
+       number, in one language. */
+    --pinned: 5;
+    /* Height budget at 1080p: 28 top + 40 cap + 24 thead + tower(2 + 5*42 + 16*42),
+       so the column ends at y=976 and 104px of frame is left underneath.
+
+       That strip is what sets this number now, not the frame edge. The credits row
+       below the tower is as tall as the iRacing plate (74px, and that is a floor:
+       see .credits), so a 17th window row would end the column at 1018 and leave 62px
+       for something that needs 74. Twenty-one cars on screen is the price of carrying
+       the sim credit at the size its own guidelines require. */
+    --window: 16;
+  }
+
+  * { box-sizing: border-box; }
+
+  .stage {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    font-family: var(--font-cond);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- cinematic preview backdrop (hidden with ?live) ---- */
+  .stage__bg {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(120% 90% at 78% 12%,
+        color-mix(in srgb, var(--brand-deep) 26%, #14121a) 0%, #100e14 45%, #08070a 100%),
+      linear-gradient(180deg, #131118 0%, #08070a 100%);
+  }
+  .stage__bg::before {
+    content: "";
+    position: absolute;
+    inset: -20%;
+    background: repeating-linear-gradient(
+      -24deg, transparent 0 60px,
+      color-mix(in srgb, var(--brand) 9%, transparent) 60px 61px,
+      transparent 61px 130px
+    );
+    animation: streak 9s linear infinite;
+  }
+  .stage__bg::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(130% 120% at 30% 40%, transparent 40%, rgba(0,0,0,0.6) 100%);
+  }
+  @keyframes streak { to { transform: translateX(130px); } }
+
+  .grain {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .live .stage__bg,
+  .live .grain,
+  .live .preview-note { display: none; }
+  .live .stage { background: transparent; }
+
+  /* ---- the broadcast package (top-left column) ---- */
+  .broadcast {
+    position: absolute;
+    top: 28px;
+    left: 30px;
+    /* the tower BODY plus the outrigger. Everything in here is full-width; only the
+       rows and the timing header subdivide themselves into body + outrigger. */
+    width: calc(var(--towerW) + var(--outrigW));
+    transform-origin: top left;
+    filter: drop-shadow(0 14px 30px rgba(0,0,0,0.55));
+  }
+
+  /* session / flag cap */
+  .cap {
+    display: flex;
+    align-items: stretch;
+    height: 40px;
+    background: var(--glass-hi);
+    border: 1px solid var(--line);
+    border-bottom: none;
+    /* the brand spine. A horizontal rule along the top of the package reads as
+       furniture, not as a state: unlike a brand-coloured fill next to
+       .cap__flag, which is the confusion issue #9 is about. */
+    border-top: 2px solid var(--brand);
+    backdrop-filter: blur(8px);
+    overflow: hidden;
+  }
+  .cap__flag {
+    width: 8px;
+    background: var(--flag-green);
+    box-shadow: 0 0 14px 1px color-mix(in srgb, var(--flag-green) 70%, transparent);
+    transition: background .3s, box-shadow .3s;
+  }
+  .cap__body { display: flex; flex-direction: column; justify-content: center; padding: 0 12px; flex: 1; min-width: 0; }
+  .cap__track {
+    font-size: 15px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cap__sub {
+    font-size: 10.5px; letter-spacing: 0.16em; color: var(--muted); text-transform: uppercase;
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .badge { font-size: 9px; font-weight: 800; letter-spacing: 0.14em; padding: 1px 5px; border-radius: 2px; flex: none; }
+  .badge--live { color: #fff; background: var(--flag-red); display: inline-flex; align-items: center; gap: 4px; }
+  .badge--live i { width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: pulse 1.5s ease-in-out infinite; }
+  /* The feed is gone. Nothing on the board is current, and it must not say LIVE. */
+  .badge--offline { color: #fff; background: #6b6b6b; }
+  /* (no .badge--replay: a saved tape shows no badge at all, so the word REPLAY on
+     screen always means the instant-replay treatment and nothing else) */
+  /* which session of the weekend. A race is the expected thing, so it reads as a quiet
+     outline chip; practice/qualifying/warm-up are the ones the viewer has to NOT
+     mistake for a race, so they take the signature colour and shout a little. */
+  .badge--session { color: var(--ink-soft); background: transparent; border: 1px solid var(--line); }
+  /* Which round of the championship this is. Quieter than the session badge and
+     brand-tinted rather than outlined, because it says what COMPETITION this is
+     rather than what is happening on track: the same distinction that keeps
+     --brand on the chrome and --accent on live state. Absent entirely when there
+     is no league, which is most of the time and is not a degraded state. */
+  .badge--round { color: var(--brand-lift); background: var(--chip);
+                  border: 1px solid var(--line); }
+  .badge--session.is-nonrace { color: var(--on-accent); background: var(--accent); border-color: transparent; }
+
+  /* ================= INSTANT REPLAY =================
+     Driven by model.instantReplay (the DIRECTOR's excursion), never by
+     session.replay, that one is the sim's IsReplayPlaying and is true for every
+     frame of a saved tape (#62), so it cannot mark a replay.
+
+     Deliberately loud, and mostly NOT text. A viewer glancing up has to know the
+     picture stopped being live before they read a word, so the letterbox does the
+     work and the wording only says which moment. Red is correct here even though
+     red is otherwise reserved for flags: nothing else in the package moves the
+     frame itself, so there is no caution to confuse it with. */
+  .rpy { position: absolute; inset: 0; pointer-events: none; opacity: 0;
+         transition: opacity 0.25s ease; z-index: 40; }
+  .is-replay .rpy { opacity: 1; }
+
+  /* The bars are the signal. They squeeze the picture, which reads instantly and
+     at any size, including on a phone-sized preview of the stream. */
+  .rpy__bar { position: absolute; left: 0; right: 0; height: 0; background: #000;
+              transition: height 0.36s cubic-bezier(0.22, 1, 0.36, 1); }
+  .rpy__bar--t { top: 0; }
+  .rpy__bar--b { bottom: 0; }
+  .is-replay .rpy__bar { height: 78px; }
+
+  .rpy__edge { position: absolute; inset: 0; opacity: 0; transition: opacity 0.3s;
+               box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--flag-red) 65%, transparent),
+                           inset 0 0 90px color-mix(in srgb, var(--flag-red) 22%, transparent); }
+  .is-replay .rpy__edge { opacity: 1; }
+
+  .rpy__tag { position: absolute; top: 22px; left: 50%; display: flex; gap: 14px;
+              align-items: center; opacity: 0;
+              transform: translateX(-50%) translateY(-10px);
+              transition: opacity 0.3s 0.12s, transform 0.3s 0.12s; }
+  .is-replay .rpy__tag { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .rpy__dot { width: 13px; height: 13px; border-radius: 50%; background: var(--flag-red);
+              animation: pulse 1.1s ease-in-out infinite;
+              box-shadow: 0 0 18px 2px var(--flag-red); }
+  .rpy__word { font-size: 31px; font-weight: 800; letter-spacing: 0.26em;
+               text-transform: uppercase; color: #fff; }
+
+  .rpy__cap { position: absolute; bottom: 20px; left: 50%; text-align: center;
+              transform: translateX(-50%) translateY(10px); opacity: 0;
+              transition: opacity 0.3s 0.12s, transform 0.3s 0.12s; }
+  .is-replay .rpy__cap { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* --brand-lift, not --brand: this is the only brand-coloured type in the
+     package that sits inside the replay letterbox, whose edge is --flag-red.
+     Crimson-on-red muddies into the glow; the lift keeps the word separate. */
+  .rpy__what { font-size: 23px; font-weight: 800; letter-spacing: 0.15em;
+               text-transform: uppercase; color: var(--brand-lift); }
+  .rpy__who { font-size: 15px; letter-spacing: 0.09em; color: var(--ink-soft);
+              margin-top: 3px; }
+
+  /* The tower is a LIVE timing board, and during an excursion it is describing a
+     moment that is not now. Receding it is the honest thing to do, and it stops the
+     viewer reading stale positions as current. */
+  /* GONE, not dimmed. Every number in the tower describes the live race, and a replay
+     is not the live race: at any opacity you can still read, it is wrong information
+     sitting on screen. The wipe covers the frame while this happens, so nothing is seen
+     to fade. */
+  .is-replay .broadcast { opacity: 0; transition: opacity 0.2s ease; }
+
+  /* Pop-ins and the fastest-lap toast live outside .broadcast, so they go explicitly.
+     They must: a pop-in reads "#31 · P9 · +8.4s", the car's LIVE position, printed over
+     a moment ten seconds gone. The replay caption already names the car. */
+  .is-replay .popins,
+  .is-replay .toast { opacity: 0; transition: opacity 0.2s ease; }
+
+  /* The iRacing credit is REQUIRED to be present at all times (see .simbug), so a
+     replay may not dim it, hide it, or let the letterbox bury it. It steps up clear
+     of the bar instead, and our own bug steps up with it so the bottom edge they
+     share on air is the bottom edge they share in a replay. A translate is not one of
+     the forbidden logo treatments: nothing is rescaled, recoloured or restyled. */
+  .is-replay .simbug,
+  .is-replay .bugchip { transform: translateY(-72px);
+                        transition: transform 0.36s cubic-bezier(0.22, 1, 0.36, 1); }
+
+  /* ---- the replay wipe ----
+     A stinger played HERE rather than by OBS. A replay is not a scene change, so
+     there is nothing for an OBS transition to fire on, and obs-websocket cannot
+     create a stinger anyway (see overlays/transitions/README.md), so this way the
+     cut is driven by the director's own state instead of a human hitting a button.
+
+     Drawn in CSS rather than played from a video file, which is what lets it take
+     the operator's own colour: a file would be one fixed brand, and a product whose
+     users all have their own colours cannot ship one of those. It also means no
+     binary to install and nothing to re-encode when the colour changes.
+
+     Two panels sweeping across on a 12-degree lean (harder than the package's type
+     at 8, because at 8 a full-height edge sits within 150px of vertical across a
+     1080 frame and reads as a plain box wipe). They meet at mid-animation and hold
+     the frame fully covered for ~120ms, which is the window the state flip happens
+     in; being a few ms out is invisible.
+
+     Above everything, including .rpy: the whole point is to hide the state flip
+     underneath it. */
+  .wipe {
+    position: absolute; inset: 0; pointer-events: none; z-index: 60;
+    visibility: hidden; overflow: hidden;
+  }
+  .wipe.is-playing { visibility: visible; }
+  .wipe i {
+    position: absolute; top: -12%; height: 124%; width: 62%;
+    background: linear-gradient(100deg, var(--brand-deep), var(--brand));
+    transform: skewX(-12deg);
+    /* A lip of the lift colour on the leading edge, so the seam reads as an edge
+       rather than the panel simply ending. */
+    box-shadow: 0 0 0 2px var(--brand-lift);
+  }
+  .wipe i:first-child  { left: -70%; }
+  .wipe i:last-child   { right: -70%; }
+  .wipe.is-playing i:first-child { animation: wipe-in-left 0.9s cubic-bezier(0.65, 0, 0.35, 1) forwards; }
+  .wipe.is-playing i:last-child  { animation: wipe-in-right 0.9s cubic-bezier(0.65, 0, 0.35, 1) forwards; }
+  /* The holds at 42-58% are the covered window. Off-screen at both ends so the
+     panels are never visible parked at the edge of a live frame. */
+  @keyframes wipe-in-left {
+    0%   { transform: skewX(-12deg) translateX(0); }
+    42%  { transform: skewX(-12deg) translateX(118%); }
+    58%  { transform: skewX(-12deg) translateX(118%); }
+    100% { transform: skewX(-12deg) translateX(236%); }
+  }
+  @keyframes wipe-in-right {
+    0%   { transform: skewX(-12deg) translateX(0); }
+    42%  { transform: skewX(-12deg) translateX(-118%); }
+    58%  { transform: skewX(-12deg) translateX(-118%); }
+    100% { transform: skewX(-12deg) translateX(-236%); }
+  }
+  /* No motion, no sweep: the flip still happens, undecorated, which is exactly how
+     this degrades when the animation cannot run at all. */
+  @media (prefers-reduced-motion: reduce) {
+    .wipe.is-playing i { animation: none; }
+  }
+  .cap__clock { font-variant-numeric: tabular-nums; letter-spacing: 0.06em; color: var(--ink); font-weight: 700;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cap__clock em { font-style: normal; color: var(--muted); font-weight: 400; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+  .cap__lap {
+    display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
+    padding: 0 12px; border-left: 1px solid var(--line); min-width: 96px;
+  }
+  .cap__lap b { font-size: 16px; font-variant-numeric: tabular-nums; letter-spacing: .02em; white-space: nowrap; }
+  .cap__lap span { font-size: 9.5px; letter-spacing: 0.16em; color: var(--muted); text-transform: uppercase; }
+  /* THE LAST LAP, said in words. The white bar alone was not enough to read on a stream
+     (it is 8px of a colour a viewer has to already know the meaning of), so the two
+     lines of this readout swap jobs: the words take the headline and the lap count or
+     countdown drops to the caption, where it is still there for anyone who wants it.
+     Deliberately NOT a row treatment: the rows use colour semantically, and a white row
+     would be one glance away from the checkered. */
+  .cap.is-last-lap .cap__lap b {
+    font-size: 13px; letter-spacing: 0.1em; color: #fff;
+    text-shadow: 0 0 12px color-mix(in srgb, var(--flag-white) 55%, transparent);
+  }
+  .cap.is-last-lap .cap__lap span { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* timing header */
+  .thead {
+    display: flex; align-items: center;
+    height: 24px; padding: 0 10px 0 14px;   /* right padding matches .row, so the
+                                               outrigger's rule lines up with the rows' */
+    background: var(--glass);
+    border: 1px solid var(--line);
+    border-bottom: none;
+  }
+  .thead__l { flex: 1; min-width: 0;
+    font-size: 10px; letter-spacing: 0.28em; color: var(--muted); text-transform: uppercase; }
+  /* 10px letterspaced caps: --brand-lift, per the palette block's type rule. */
+  .thead__r { font-size: 10px; letter-spacing: 0.2em; color: var(--brand-lift); text-transform: uppercase; font-weight: 700; }
+  /* caps the outrigger column: same width, same tint and same left rule as the cells
+     below it, stretched to full header height so the rule is one unbroken line */
+  .thead__o {
+    align-self: stretch; width: var(--outrigW); margin-left: 12px;
+    display: flex; align-items: center; justify-content: flex-end;
+    background: var(--outrig-bg); border-left: 1px solid var(--line);
+    font-size: 9px; letter-spacing: 0.14em; color: var(--muted); text-transform: uppercase;
+    padding-right: 8px;
+  }
+
+  /* rows area: pinned block + a clipped follow-cam window */
+  .tower {
+    position: relative;
+    background: var(--glass);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+  }
+  .pinned { position: relative; height: calc(var(--pinned) * var(--rowH)); }
+  .scroll {
+    position: relative; height: calc(var(--window) * var(--rowH));
+    overflow: hidden;
+    border-top: 1px solid var(--line);
+  }
+  /* The window SCROLLS: rows sit at their absolute rank inside here and this container
+     is translated to bring the window's first row to the top of .scroll (which clips).
+     The transition belongs here rather than on the rows because every row already
+     animates its own transform to change position: see .row. */
+  .scroll__inner {
+    position: absolute; inset: 0;
+    transition: transform .6s cubic-bezier(.4,.9,.3,1);
+    will-change: transform;
+  }
+  /* fade the top/bottom edges of the scroll window to imply more cars */
+  .scroll::before, .scroll::after {
+    content: ""; position: absolute; left: 0; right: 0; height: 20px; z-index: 5; pointer-events: none;
+  }
+  .scroll::before { top: 0; background: linear-gradient(180deg, var(--glass), transparent); }
+  .scroll::after { bottom: 0; background: linear-gradient(0deg, var(--glass), transparent); }
+  /* A fade means "there are more cars past this edge". On a field that fits entirely
+     inside the window there are none, so the fades would be shading the first and last
+     cars in the session for no reason. */
+  .scroll.fits::before, .scroll.fits::after { display: none; }
+  /* Whole field pinned (five cars or fewer): the window has no rows at all, and its
+     divider would double up with the tower's own bottom border. */
+  .scroll.empty { border-top: 0; }
+  .scroll__more {
+    /* inside the tower BODY: at the row's own right edge it landed on top of the
+       outrigger's lap time. Same offset as .row__cam (outrigger + gutter + padding). */
+    position: absolute; right: calc(var(--outrigW) + 16px); z-index: 6; pointer-events: none;
+    font-size: 9px; letter-spacing: 0.14em; color: var(--dim); text-transform: uppercase;
+  }
+  .scroll__more.top { top: 3px; }
+  .scroll__more.bot { bottom: 3px; }
+
+  .row {
+    position: absolute; left: 0; right: 0; top: 0; height: var(--rowH);
+    display: grid;
+    /* pos | num | driver | interval | outrigger.
+       Every one of these is a FIXED track so the columns line up down the whole
+       tower. They used to sit in a flex row, which let each chip start wherever the
+       name before it happened to end: readable per row, ragged as a table.
+       Each cell is assigned an explicit grid-column below.
+
+       The outrigger is a TRACK OF THIS GRID, not a parallel list running alongside
+       the tower, and that is load-bearing: rows reorder by animating `transform`
+       below, so anything not inside .row would slide out of sync with its own row
+       for the whole half-second of every position change. Being a column, it
+       inherits the transform for free and can never desync. */
+    grid-template-columns: 30px 42px minmax(40px, 1fr) auto var(--outrigW);
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 0 12px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--row);
+    transition: transform .5s cubic-bezier(.4,.9,.3,1), background .3s, opacity .35s;
+    will-change: transform;
+  }
+  .row.alt { background: var(--row-alt); }
+  /* class color bar on the left edge */
+  .row::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--cls, var(--dim));
+  }
+  .row.leader { background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 14%, transparent), var(--row) 55%); }
+  .row.pit { opacity: 0.55; }
+  /* A car in the garage is still CLASSIFIED (it holds its place on the board by the time
+     it set), but it is not part of what is happening on the road. Quieter than a pitting
+     car, because a pit stop is live action and this is not. */
+  .row.garage { opacity: 0.42; }
+  /* A towed car in a race holds its place in the order until the field passes it, so the
+     row stays where the sheet has it and falls back live. Quiet like the garage: the car
+     is on a flatbed, not on the road. */
+  .row.tow { opacity: 0.42; }
+
+  /* the car currently on camera */
+  .row.oncam {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 26%, var(--row)), var(--row) 70%);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  .row__cam {
+    /* against the right edge of the tower BODY, not of the row: the outrigger, its
+       grid gutter (6) and the row's right padding (10) all sit outboard of it. That
+       lands the dot inside the gap cell's own padding-right, which exists for it. */
+    position: absolute; right: calc(var(--outrigW) + 16px); top: 50%; transform: translateY(-50%);
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 8px 1px var(--accent); opacity: 0; transition: opacity .3s;
+  }
+  .row.oncam .row__cam { opacity: 1; animation: campulse 1.6s ease-in-out infinite; }
+  @keyframes campulse { 50% { opacity: .35; } }
+
+  .pos {
+    justify-self: center;
+    width: 26px; height: 24px;
+    display: grid; place-items: center;
+    background: var(--well);
+    transform: skewX(-11deg);
+    border: 1px solid var(--line-soft);
+  }
+  .pos b {
+    display: block; transform: skewX(11deg);
+    font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .row.leader .pos { background: var(--accent); border-color: transparent; }
+  .row.leader .pos b { color: var(--on-accent); }
+
+  .num {
+    justify-self: start;
+    font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    letter-spacing: .01em;
+  }
+
+  /* one cell per column, pinned explicitly so hiding an empty cell never reflows the
+     ones after it */
+  .pos { grid-column: 1; }
+  .num { grid-column: 2; }
+  .tla { grid-column: 3; }
+  .gap { grid-column: 4; }
+  .outrig { grid-column: 5; }
+
+  /* The class chip, the licence chip and the iRating used to sit between the driver
+     and the gap. They came out to buy back 146px of frame: the CLASS is already said
+     by the colour bar down the row's left edge (.row::before, and the pop-in still
+     spells it out for the car on camera), and a licence and an iRating are paddock
+     detail: they say who a driver is on a results page, not what is happening in
+     the race. Both still ride the payload and both still appear on the pop-in, which
+     is where a viewer has time to read them. */
+
+  .tla {
+    min-width: 0;
+    font-size: 15px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .gap {
+    justify-self: end; text-align: right;
+    font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em; color: var(--ink);
+    min-width: 68px;   /* "LEADER" is the widest value; below this it crowds the iRating */
+    padding-right: 10px;   /* leave room for the on-cam dot */
+  }
+  .gap.leader-tag { color: var(--accent); font-weight: 700; letter-spacing: 0.1em; font-size: 12px; }
+  /* The pace-setter's own lap in a non-race session: the reference every other row's
+     "+0.312" is measured from, so it reads as a time rather than as a gap. Purple, since
+     it IS the session's fastest lap and purple already means that on this page, and the
+     row it lands on is the fastest-lap holder's by construction, so the two agree.
+     A shade smaller than a race gap: "1:38.204" is wider than "+12.3". */
+  .gap.best-tag { color: var(--fast); font-weight: 700; font-size: 12.5px; }
+  .gap.lap-tag { color: var(--muted); font-weight: 700; letter-spacing: 0.06em; font-size: 12px; }
+  .row.battle .gap { color: var(--accent); text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+
+  /* ---- the outrigger: PIT, else the car's last completed lap ----
+     Stretched to the full row height on purpose: its left border, and those of the
+     cells above and below it, then draw ONE unbroken rule down the tower, and the
+     tint stays a solid strip rather than 42px chips with holes between them. It is
+     never display:none'd when empty, for the same reason: a car that has not set a
+     lap should leave a quiet gap in the column, not a notch in it. */
+  .outrig {
+    align-self: stretch;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 8px;
+    background: var(--outrig-bg);
+    border-left: 1px solid var(--line);
+    /* quieter than every column to its left: this is secondary information and must
+       not compete with position, number, driver or gap. tabular-nums so a 1:59.9 ->
+       2:00.1 rollover doesn't shuffle the digits sideways. */
+    font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em; color: var(--ink-soft);
+  }
+  /* PIT outranks the lap time: a car on pit road has one thing worth saying about it.
+     Same yellow it wore when it lived in the gap column. */
+  .outrig.is-pit {
+    color: var(--flag-yellow); font-weight: 800; letter-spacing: 0.12em; font-size: 11px;
+  }
+  /* GARAGE is not a PIT: a car on pit road is mid-session activity, worth the yellow,
+     while a car in the garage is inactive and should read as such. Same shape as PIT so
+     the column stays one column, drawn in the muted grey instead. */
+  .outrig.is-garage, .outrig.is-tow {
+    color: var(--muted); font-weight: 800; letter-spacing: 0.1em; font-size: 10px;
+  }
+  /* ---- a flag shown to ONE car: the outrigger says that instead of a lap time ----
+     Deliberately not yellow, and deliberately not the row treatment a caution gets: this
+     is an order to one driver, not a state of the track, and a viewer must not read it as
+     the session going yellow. Each one wears the colour of the real flag.
+
+     Common shape: a filled chip, because a penalty has to survive being glanced at over
+     moving video, where tinted text does not. */
+  .outrig.is-black, .outrig.is-meatball, .outrig.is-furled {
+    justify-content: center;
+    font-size: 10px; font-weight: 800; letter-spacing: 0.1em;
+  }
+  /* An actual black flag is black, which is invisible on a dark overlay, so it is drawn
+     the way a graphics operator draws it: white on near-black, ringed so the chip has an
+     edge against the outrigger's own dark tint. */
+  .outrig.is-black {
+    background: #0b0b0d; color: #ffffff;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85);
+    border-left-color: rgba(255, 255, 255, 0.85);
+  }
+  .outrig.is-meatball {
+    background: var(--flag-orange); color: var(--on-bright);
+    border-left-color: var(--flag-orange);
+  }
+  /* Furled = the black flag rolled up, i.e. a warning that has not been served yet. So it
+     is the black chip HOLLOW: same vocabulary, plainly a lesser thing. */
+  .outrig.is-furled {
+    background: rgba(11, 11, 13, 0.72); color: #ffffff;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+    border-left-color: rgba(255, 255, 255, 0.45);
+  }
+
+  /* Whoever holds the quickest lap of the session: purple, because purple means fastest
+     lap everywhere in motorsport and a racing viewer reads it without being told.
+     Persistent, and quiet: the toast is the loud transient when it changes hands.
+
+     It marks the CELL, not the number in it. The outrigger prints the car's LAST lap and
+     the holder's last lap is usually not their best, so colouring that number purple
+     would claim a time the column is not showing. The 2px bar interrupts the unbroken
+     rule the outriggers draw down the tower, which is exactly what a marker should do,
+     and it reads at broadcast scale where a hairline would not.
+
+     The :not()s are the precedence, spelled out rather than left to specificity: a car
+     can hold the fastest lap AND be under a flag, and the flag is the thing to show. A
+     plain `.row.fast .outrig` is three classes to the flag chips' two, so it would win by
+     the cascade and paint purple over a black flag. */
+  .row.fast .outrig:not(.is-black):not(.is-meatball):not(.is-furled) {
+    background: color-mix(in srgb, var(--fast) 14%, var(--outrig-bg));
+    box-shadow: inset 2px 0 0 var(--fast);
+    border-left-color: var(--fast);
+  }
+
+  /* ---- camera focus pop-ins (lower thirds / name bugs) ----
+     A battle is laid out the way the two cars actually are on the road: the car in front
+     on the LEFT, the one chasing it on the RIGHT, and the live gap chip physically
+     between them. Stacked vertically the pair read as a list of two cars rather than as
+     one fight, and the gap chip (which is the whole point of the pair graphic) sat
+     above the leading car instead of in the space it measures.
+
+     A single name bug is one child, so row and column are the same thing for it: this
+     changes the battle case only. `align-items: center` now centres the 36px gap chip
+     against the 84px cards instead of centring the stack horizontally. */
+  .popins {
+    position: absolute; left: 50%; bottom: 54px; transform: translateX(-50%);
+    display: flex; flex-direction: row; align-items: center; gap: 8px;
+  }
+  .popin {
+    position: relative;
+    display: flex; align-items: stretch;
+    /* Fixed: every card in a group is the same size and never resizes. Narrower for a
+       battle, because two of them plus the chip have to fit beside what is already down
+       the left of the frame, and the pair is centred on the FRAME rather than on the
+       space left over: an off-centre battle graphic reads as a mistake.
+
+       What it has to clear is the left column, which is 320px wide from x=30 to x=350
+       the whole way down: the tower, and now the iRacing plate squared off underneath
+       it (y=984..1068, which does overlap these cards vertically). One number to clear,
+       not two, which is the point of sizing the plate off --towerW rather than by eye.
+
+       2*512 + 2*8 gaps + 120 chip = 1160, which centres to 380..1540 and clears that
+       column by 30px. At 640 the left card would start at 252, i.e. under it. */
+    width: var(--popinW, 640px);
+    height: 84px;
+    background: var(--glass-hi);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    filter: drop-shadow(0 16px 34px rgba(0,0,0,0.6));
+    transform: translateY(140%); opacity: 0;
+    transition: transform .55s cubic-bezier(.2,.9,.25,1), opacity .5s;
+  }
+  .popins { --popinW: 640px; }
+  .popin.show { transform: translateY(0); opacity: 1; }
+  /* A card on its way out leaves the FLOW at once, pinned where it was (renderPopins sets
+     left/top), so it fades without shoving the incoming group sideways. */
+  .popin.leaving { position: absolute; pointer-events: none; }
+
+  /* ---- the battle bar ----
+     Two cards and the gap read as ONE graphic, laid out the way a world feed does it:
+     the position numbers on the OUTSIDE bracketing the pair, each car's name mirrored
+     toward its own edge, and the gap in the middle. The numbers being outboard is what
+     makes it parse instantly: the graphic reads outward from the gap that is the
+     subject, instead of having both numbers stacked down its left-hand side.
+     See samples/battle_overlay_f1_sample.png. */
+  .popins.is-battle { --popinW: 512px; gap: 0; }
+  /* one continuous bar, not three floating boxes: collapse the touching 1px borders */
+  .popins.is-battle > * + * { margin-left: -1px; }
+  .popins.is-battle .popin:last-child { flex-direction: row-reverse; }
+  .popins.is-battle .popin:last-child .popin__body {
+    align-items: flex-end; text-align: right;
+    padding: 8px 16px 8px 18px;      /* mirror of the left card's asymmetric padding */
+  }
+  /* The 8px class bar would sit OUTBOARD of the position number, which is the one place
+     the number has to be. The class colour moves to the surname instead, and a battle
+     is same-class by construction (the director skips cross-class pairs), so the class
+     chip under each number would only say the same thing twice. */
+  .popins.is-battle .popin__cls,
+  .popins.is-battle .popin__creds,
+  .popins.is-battle .popin__poscls { display: none; }
+  .popins.is-battle .popin__posnum span { display: none; }   /* no "P": just the number */
+  .popins.is-battle .popin__pos {
+    background: none; border: none; width: 84px;
+  }
+  .popins.is-battle .popin__posnum b { font-size: 46px; }
+  .popins.is-battle .popin__name { font-size: 28px; color: var(--cls, var(--accent)); }
+  .popins.is-battle .popin__first { font-size: 14px; }
+  /* Which car the camera is actually ON, without drawing a box around half the bar: a
+     full accent border made the on-cam card read as a separate panel that had docked
+     next to the other one, which is the opposite of the point. An inset underline says
+     the same thing and leaves the bar whole. (The reference has no such cue because a
+     human director does not need telling which car they cut to.) */
+  .popins.is-battle .popin.oncam {
+    border-color: var(--line);
+    box-shadow: inset 0 -3px 0 var(--accent);
+  }
+  /* the actual on-camera car (vs. its battle rival) gets the accent edge */
+  /* half-strength accent edge. Mixed against transparent, NOT against --line:
+     --line is brand-tinted now, and mixing it in pulled this edge toward crimson,
+     which is the one direction a "this is the car on camera" cue must not go. */
+  .popin.oncam { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .popin.rival { opacity: 0.9; }
+  .popin.rival.show { opacity: 0.9; }
+  /* brief accent flash when the camera cuts to a new car (box-shadow, so it
+     doesn't fight the slide transform) */
+  .popin.bump { animation: popbump 0.6s ease; }
+  @keyframes popbump {
+    30% { box-shadow: 0 0 0 1px var(--cls, var(--accent)),
+                      0 0 22px 0 color-mix(in srgb, var(--cls, var(--accent)) 55%, transparent); }
+  }
+  .popin__cls {
+    width: 8px; background: var(--cls, var(--accent));
+    box-shadow: 0 0 16px 1px color-mix(in srgb, var(--cls, var(--accent)) 60%, transparent);
+  }
+  /* running-position badge: big overall place on top, class + class-position under it
+     so the box is filled top-to-bottom (no dead space beneath the number) */
+  .popin__pos {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    width: 100px; flex: none; padding: 8px 8px;
+    background: var(--chip);
+    border-right: 1px solid var(--line);
+  }
+  .popin__posnum { display: flex; align-items: baseline; gap: 1px; }
+  .popin__posnum span { font-size: 15px; font-weight: 800; color: var(--muted); letter-spacing: 0.02em; }
+  .popin__posnum b {
+    font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em; line-height: 1; color: var(--ink);
+  }
+  .popin__poscls { display: flex; align-items: center; gap: 6px; }
+  .popin__clschip {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 2px 5px; border-radius: 3px; line-height: 1;
+    color: var(--on-bright); background: var(--cls, var(--dim));
+  }
+  .popin__clspos { font-size: 12.5px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--ink); }
+  /* leader's badge glows in the signature accent */
+  .popin.leader .popin__pos { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+  .popin.leader .popin__posnum b { color: var(--accent); }
+  /* a stricken car flags yellow (--flag-yellow, the caution it actually is) */
+  .popin.trouble .popin__cls { background: var(--flag-yellow); box-shadow: 0 0 16px 1px color-mix(in srgb, var(--flag-yellow) 60%, transparent); }
+
+  .popin__body {
+    display: flex; flex-direction: column; justify-content: center; gap: 5px;
+    padding: 8px 18px 8px 16px; flex: 1; min-width: 0;   /* min-width:0 -> long text ellipsizes */
+  }
+  /* Given name, over the surname. Only the battle bar sets it; a solo card leaves it
+     empty and it takes no room (:empty), so one card keeps its two-line shape. */
+  .popin__first {
+    font-size: 15px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--ink-soft); line-height: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .popin__first:empty { display: none; }
+  .popin__name {
+    font-size: 22px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; line-height: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .popin__name .popin__no { color: var(--cls, var(--accent)); font-weight: 800; margin-right: 3px; }
+  .popin__make .popin__no { color: var(--cls, var(--accent)); font-weight: 800; margin-right: 5px; }
+  /* manufacturer wordmark + model. Sized up and lifted off --muted: at 11.5px this
+     was ~4.6:1 on the glass, which is thin for condensed uppercase over moving video. */
+  .popin__make {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
+    color: var(--ink-soft); text-transform: uppercase;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .popin__make b { color: var(--ink); font-weight: 800; margin-right: 5px; }
+
+  /* driver credentials: licence + iRating + country, mirroring the position badge on
+     the far side of the card. Hidden entirely (JS) when the session carries none:
+     an AI or unofficial field reports no rating and no licence. */
+  /* 80px fits the widest cell (the licence chip, 47px measured) with margin. It was
+     120 when this column printed a country NAME; the flag freed that width, and the
+     driver's name is what needed it: "Bastian Benitez Valenzuela" wants ~398px. */
+  .popin__creds {
+    display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 6px;
+    width: 80px; flex: none; padding: 8px 12px 8px 8px;
+    background: var(--chip);
+    border-left: 1px solid var(--line);
+  }
+  .popin__lic {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    padding: 2px 6px; border-radius: 3px; line-height: 1;
+    color: var(--on-bright); background: var(--lic, var(--dim));
+  }
+  .popin__lic:empty { display: none; }
+  .popin__lic b { font-size: 12.5px; font-weight: 800; letter-spacing: 0.04em; }
+  .popin__lic i { font-style: normal; font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .popin__ir {
+    font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em; line-height: 1; color: var(--ink);
+  }
+  .popin__ir:empty { display: none; }
+  .popin__ir em { font-style: normal; font-size: 9.5px; font-weight: 700; color: var(--muted); margin-left: 3px; }
+  /* Normally a flag emoji, which reads at a glance where a country name had to be
+     squinted at. Falls back to the name (small, ellipsized) for the flairs that have
+     no flag: "Global", "Unaffiliated", or a spelling we don't resolve. */
+  .popin__country {
+    /* Flags first: a font only serves the glyphs it actually has, so the subset takes
+       the regional-indicator pairs and the is-name fallback text below falls straight
+       through to the normal stack. */
+    font-family: "IRB Flags", var(--font-cond);
+    font-size: 22px; line-height: 1; max-width: 100%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .popin__country.is-name {
+    font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .popin__country:empty { display: none; }
+
+  /* battle gap chip: the live interval between the pair, sits between the two cards
+     and ticks every frame so you can watch the gap close. Colour tracks the trend.
+
+     Full card height, and stacked rather than side by side. A short wide chip floating
+     between two 84px cards read as a different KIND of thing that had drifted in; at the
+     same height it reads as the middle panel of one three-part graphic, which is what it
+     is. Stacking the label over the value is the same idiom as the card's own position
+     block (.popin__pos), and it fills the height instead of leaving air above and below.
+
+     The width is FIXED, which matters more than it looks: the value swings between "0.4s"
+     and "12s" as the gap opens, and an auto-width chip would resize on every tick and
+     shove both cards sideways: the pair would never sit still. Sized for the widest
+     thing it prints. */
+  .popin-gap {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px;
+    width: 148px; height: 84px; flex: none;
+    background: var(--glass-hi);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    filter: drop-shadow(0 10px 22px rgba(0,0,0,0.55));
+    transform: translateY(60%) scale(0.92); opacity: 0;
+    transition: transform .45s cubic-bezier(.2,.9,.25,1), opacity .4s,
+                box-shadow .3s, border-color .3s, color .3s;
+  }
+  .popin-gap.show { transform: translateY(0) scale(1); opacity: 1; }
+  .popin-gap__label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--muted); line-height: 1;
+  }
+  .popin-gap__val {
+    font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em; line-height: 1; color: var(--ink);
+    transition: color .3s;
+  }
+  /* the unit rides small and low, so the digits are the thing you read */
+  .popin-gap__val i {
+    font-size: 17px; font-weight: 700; font-style: normal; margin-left: 1px;
+  }
+  /* GREEN = the gap is coming down. The one fact that says whether this is a fight or
+     two cars in a queue, and it is measured (closing rate, s/s) rather than implied. */
+  .popin-gap.is-closing .popin-gap__val { color: var(--flag-green); }
+
+  /* ---- credits: whose broadcast this is, and what it is running on ----
+     Both marks on one line in the bottom-left corner, under the tower: ours first,
+     then the sim's. They used to sit in opposite corners, which read as two unrelated
+     bits of furniture rather than a credit line.
+
+     Positioned against the FRAME rather than flowed under .broadcast on purpose: a
+     channel bug belongs in the corner of the picture, and flowing it would let the
+     row float up the screen whenever the tower shortens for a small field.
+
+     They share a BOTTOM EDGE (both sit 12px off the frame) rather than a container.
+     Sitting in opposite corners they cannot be one element, so the replay step-up runs
+     on each of them; a frame of drift between two things 1500px apart is not something
+     an eye can see, where on one line it was.
+
+     The 12px is set by the iRacing plate, which is the tallest fixed thing on the
+     frame and cannot shrink: see .simbug for why 84px is a floor, and --window for
+     the tower row it already costs. */
+
+  /* Our channel bug, bottom right. A dark glass chip rather than a bare mark: it puts
+     the crimson somewhere it reads over any footage without competing with the sim
+     credit diagonally opposite, which two bright marks in the same corner did.
+
+     The chip is also what lets the drop shadow go. overlays/brand/README.md is explicit
+     that this artwork is drawn with a KEYLINE rather than a shadow ("a drop shadow
+     would cost a filter region and blur under compression"), and the bug was carrying
+     one anyway to survive bright tarmac. Backed by the chip it does not need to.
+
+     Same glass as the pop-ins and the toast, so it reads as part of the package. */
+  .bugchip {
+    position: absolute; right: 30px; bottom: 12px;
+    display: flex; align-items: center;
+    padding: 7px 12px 7px 9px;
+    background: rgba(0, 0, 0, 0.46);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 3px;
+    backdrop-filter: blur(8px);
+  }
+  /* The horizontal lockup, mark and name, rather than the mark alone: at chip size
+     a bare 30px ring says less than the old three-letter wordmark did, and the chip
+     has the width. 36px tall puts the name at an 11px cap, readable on a monitor;
+     on a phone the mark is what carries it, which is what a mark is for. */
+  .bug { height: 36px; display: block; opacity: 0.94; }
+
+  /* iRacing sim credit, bottom left, squared off against the tower. REQUIRED by the
+     iRacing Broadcast Policy: a logo or watermark in one of the FOUR CORNERS, minimum
+     185x45px at 1920 width. The sim renders its own, but our camera framing crops it
+     off, so we carry it ourselves. The policy names no particular corner, so bottom
+     left is as compliant as the bottom right this used to sit in.
+
+     WIDTH-DRIVEN, and that is the whole idea here. The plate is exactly as wide as the
+     tower above it (one variable, not a copied number), so the two share an edge at
+     x=30 and x=350 and read as one column of furniture instead of a box that happens
+     to be nearby. The logo then fills the plate rather than floating in it: at 15px
+     padding the artwork is 290px wide, up from 247.
+
+     THE RULES BELOW ARE NOT TASTE, they are the iRacing Logo Guidelines (2024), and
+     they differ from how .bug above is treated: do not "make it consistent":
+
+     - No drop shadow, and no effects of any kind. .bug sits on a glass chip; this may
+       not, and does not need to: the plate is its contrast.
+     - No recolouring, stretching, flipping, rotating, or rescaling parts. ONE dimension
+       is set and the other follows from the artwork's own 5.3706 aspect; never both.
+       It used to be the height that was set; it is now the width, because the width is
+       what has to agree with the tower. Nothing about that distorts the mark.
+     - "High contrast between background colour and logo colour is an absolute must."
+       Over live video nothing can be assumed (a white car or a bright sky would
+       swallow the white wordmark), and a shadow is not available to rescue it. Hence
+       the solid plate, in iRacing Dark Blue (#0F1F43, their own primary), which is
+       exactly how their guidelines present the white lockup.
+     - Safe zone: keep other elements at least half a letter-height away. The letters
+       are ~55% of the lockup height, so at 54px that is ~15px, and the padding grew
+       with the logo to match. The padding IS the safe zone; do not trim it to save
+       height.
+
+     Which fixes the plate at 320 wide and 84 tall (54 + 2*15), and 84 is a FLOOR: at
+     this width, shrinking the padding shrinks the safe zone, and growing it grows the
+     plate faster than it shrinks the logo. That number is what sets --window and the
+     12px the bug matches. */
+  .simbug {
+    position: absolute; left: 30px; bottom: 12px;
+    width: calc(var(--towerW) + var(--outrigW));
+    padding: 15px;
+    background: #0F1F43;
+    border-radius: 3px;
+  }
+  /* 290px wide clears the policy's 185px floor comfortably; the artwork's aspect then
+     gives ~54px of height, over the 45px floor with room to spare. */
+  .simbug img { width: 100%; height: auto; display: block; }
+
+  /* fastest lap toast: drops in from the TOP of the frame when the time changes hands.
+     It used to sit at the bottom and slide in from the left, which had two problems. It
+     entered across the picture, so the eye tracked it sideways rather than just finding
+     it; and the bottom of the frame is now taken: a battle's two cards sit side by side
+     from x=380 to x=1540 at y=942..1026, which is exactly where this was. The top edge is
+     empty apart from the cap, so it drops in beside it and reads as top furniture.
+
+     Vertically aligned with the cap (top: 28px) and horizontally clear of the tower
+     column, which runs almost the full height of the frame. */
+  .toast {
+    position: absolute; top: 28px;
+    left: calc(30px + var(--towerW) + var(--outrigW) + 22px);
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px 10px 12px;
+    background: var(--glass-hi);
+    border: 1px solid color-mix(in srgb, var(--fast) 50%, transparent);
+    border-left: 4px solid var(--fast);
+    backdrop-filter: blur(8px);
+    /* drops DOWN into place from above the frame edge, rather than sliding in across the
+       picture: the eye finds it where it lands instead of tracking it sideways */
+    transform: translateY(-190%); opacity: 0;
+    transition: transform .5s cubic-bezier(.2,.9,.3,1), opacity .5s;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast__label { font-size: 10px; letter-spacing: 0.24em; color: var(--fast); text-transform: uppercase; }
+  .toast__car { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; }
+  .toast__time { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--fast); }
+
+  /* Sits ABOVE the channel bug, which now holds the bottom-right corner. Only ever
+     visible in preview (.live hides it), but a preview whose own label is buried under
+     the bug is a preview that lies about the frame. */
+  .preview-note {
+    position: absolute; right: 18px; bottom: 68px;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 11px; letter-spacing: 0.08em; color: rgba(255,255,255,0.4);
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 720px) { .broadcast, .popin { transform: scale(0.82); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stage__bg::before { animation: none; }
+    .row, .toast, .popin, .popin-gap, .cap__flag, .row.oncam .row__cam { transition: none; animation: none; }
+  }
+</style>
+
+<div class="stage" id="stage">
+  <div class="stage__bg"></div>
+  <div class="grain"></div>
+
+  <!-- Instant replay. Sits outside .broadcast on purpose: that whole block recedes
+       during an excursion, and this must not recede with it. -->
+  <div class="rpy" id="rpy">
+    <div class="rpy__bar rpy__bar--t"></div>
+    <div class="rpy__bar rpy__bar--b"></div>
+    <div class="rpy__edge"></div>
+    <div class="rpy__tag">
+      <i class="rpy__dot"></i>
+      <span class="rpy__word">Instant Replay</span>
+      <i class="rpy__dot"></i>
+    </div>
+    <div class="rpy__cap">
+      <div class="rpy__what" id="rpyWhat">Contact</div>
+      <div class="rpy__who" id="rpyWho"></div>
+    </div>
+  </div>
+
+  <div class="broadcast">
+    <div class="cap">
+      <div class="cap__flag" id="flag"></div>
+      <div class="cap__body">
+        <div class="cap__track" id="track">ROAD ATLANTA</div>
+        <div class="cap__sub" id="session">GT CHAMPIONSHIP · RACE</div>
+      </div>
+      <div class="cap__lap">
+        <b id="lap">12/40</b>
+        <span id="lapLabel">lap</span>
+      </div>
+    </div>
+
+    <div class="thead">
+      <span class="thead__l">Live Timing</span>
+      <!-- "Interval" in a race; a non-race session classifies by lap time, so the
+           column becomes the gap to the quickest car and says so (see render). -->
+      <span class="thead__r" id="theadGap">Interval</span>
+      <!-- "Last" everywhere except QUALIFYING, where the column holds the best lap
+           because that is the result of the session (see outrigFor). -->
+      <span class="thead__o" id="theadOutrig">Last</span>
+    </div>
+
+    <div class="tower">
+      <div class="pinned" id="pinned"></div>
+      <div class="scroll" id="scroll">
+        <span class="scroll__more top" id="moreTop"></span>
+        <div class="scroll__inner" id="scrollInner"></div>
+        <span class="scroll__more bot" id="moreBot"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="popins" id="popins"></div>
+
+  <div class="toast" id="toast">
+    <span class="toast__label">Fastest Lap</span>
+    <span class="toast__car" id="toastCar">#7 HALL</span>
+    <span class="toast__time" id="toastTime">1:38.204</span>
+  </div>
+
+  <!-- iRacing asks broadcasters to carry its logo. Pylon does not ship the file:
+       it is iRacing's trademark and not ours to redistribute. Download the official
+       one from iRacing's media kit, save it into this folder as
+       brand/iracing-horizontal.svg, and it appears here. Missing, it removes itself
+       rather than leaving a broken-image glyph on air (overlay.js). -->
+  <div class="simbug"><img src="brand/iracing-horizontal.svg" alt="iRacing"></div>
+  <!-- The operator's own logo, set in the settings (look.logo) and applied by
+       overlay.js. No src here on purpose: an empty one would 404 on every load. -->
+  <div class="bugchip"><img class="bug" alt=""></div>
+
+  <div class="preview-note">Preview · mock data · transparent in OBS (?live)</div>
+
+  <!-- Two panels, swept in CSS. See the .wipe block above. -->
+  <div class="wipe" id="wipe"><i></i><i></i></div>
+</div>
+
+<script src="overlay.js"></script>

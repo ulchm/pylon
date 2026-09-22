@@ -1,0 +1,96 @@
+name: release
+
+# Builds the Windows installer and the portable zip, and attaches them to a GitHub
+# release. Run BY HAND (Actions -> release -> Run workflow), or automatically when a
+# version tag is pushed.
+#
+# Windows-only by necessity: PyInstaller freezes the interpreter and libraries of the
+# machine it runs on, so a Windows executable has to be built on Windows. Everything
+# else in this repository is developed and tested on Linux (see the ci workflow).
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create the release as a draft"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write     # needed to create the release and upload to it
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      # The suite runs here as well as in ci, on Windows, because this is the only
+      # place it ever runs on the platform it ships to.
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Install PyInstaller
+        run: uv pip install pyinstaller
+
+      - name: Build the application
+        run: uv run pyinstaller packaging/pylon.spec --noconfirm
+
+      # A build that cannot answer `doctor` is missing a data file or a lazy import,
+      # and that is the failure PyInstaller actually produces. Exit code 1 here means
+      # "OBS is not running", which is expected on a runner, so only a crash fails it.
+      - name: Smoke-test the executable
+        shell: pwsh
+        run: |
+          dist\Pylon\Pylon.exe --help
+          dist\Pylon\Pylon.exe doctor --no-sim
+          if ($LASTEXITCODE -gt 1) { throw "doctor crashed (exit $LASTEXITCODE)" }
+          dist\Pylon\Pylon.exe config --path
+
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\pylon.iss
+
+      - name: Make the portable zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\Pylon\* `
+            -DestinationPath "Pylon-${{ steps.version.outputs.version }}-portable.zip"
+
+      - name: Keep the artefacts even without a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: pylon-windows
+          path: |
+            packaging/Output/*.exe
+            *-portable.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          generate_release_notes: true
+          files: |
+            packaging/Output/*.exe
+            *-portable.zip

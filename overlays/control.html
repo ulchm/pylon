@@ -1,0 +1,419 @@
+<!-- The Pylon control panel.
+
+     Registered in OBS as a Custom Browser Dock (View > Docks > Custom Browser Docks),
+     so this panel lives inside the OBS window with no plugin, no Qt and nothing to
+     rebuild when OBS bumps its ABI. It talks to the supervisor's small JSON API.
+
+     For most people this panel IS Pylon. It is where the show is checked on, set up
+     and adjusted, and nothing here needs a terminal. Two tabs: Show (what is running,
+     and the buttons) and Settings (the config file as a form).
+
+     Three things it must never do. It must not show green when the SUPERVISOR itself
+     has gone away, so a failed poll blanks every row and says so: a stale panel that
+     still reads "ok" is worse than no panel. Stop must not be one click, because it
+     ends the broadcast and this sits inside the window you are already clicking around
+     in. And it must never overwrite settings a person is in the middle of typing, so
+     the Settings form is only ever loaded when that tab is opened, never on a poll. -->
+<style>
+  :root {
+    --bg: #16191f;
+    --panel: #1d222a;
+    --line: #2b3038;
+    --ink: #e9ecf2;
+    --muted: #8a93a6;
+    --ok: #2fd46b;
+    --warn: #ffcf2e;
+    --bad: #ff4d4d;
+    --live: #ff4d4d;
+    --font: "Bahnschrift", "DIN Alternate", "Roboto Condensed", ui-sans-serif,
+      system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 10px; background: var(--bg); color: var(--ink);
+    font-family: var(--font); font-size: 13px; -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- tabs ---- */
+  .tabs { display: flex; gap: 4px; margin-bottom: 9px; }
+  .tab {
+    flex: 1 1 0; text-align: center; padding: 6px 4px; cursor: pointer;
+    font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+  .tab.is-on { color: var(--ink); border-color: #46506a; background: #232a36; }
+  .live-lamp {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--live); margin-left: 5px; vertical-align: middle;
+    animation: lamp 1.6s ease-in-out infinite;
+  }
+  @keyframes lamp { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+  .row {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+    padding: 7px 9px; margin-bottom: 5px;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .dot.bad { background: var(--bad); }
+  .name { font-weight: 700; flex: 1 1 auto; min-width: 0; }
+  .meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .err {
+    color: var(--warn); font-size: 11px; margin: -2px 0 6px; padding: 0 9px;
+    word-break: break-word;
+  }
+  button {
+    font-family: var(--font); font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    color: var(--ink); background: #262c36; border: 1px solid var(--line);
+    border-radius: 4px; padding: 4px 8px; cursor: pointer; flex: 0 0 auto;
+  }
+  button:hover { background: #2f3742; }
+  button:disabled { opacity: .4; cursor: default; }
+  .wide { width: 100%; padding: 8px; margin-top: 8px; }
+  .stop { border-color: #5a2b2b; }
+  .stop.armed { background: var(--bad); border-color: var(--bad); color: #1a0d0d; }
+  .offline {
+    background: #2a1c1c; border: 1px solid #5a2b2b; color: #ffb4b4;
+    border-radius: 5px; padding: 8px 9px; margin-bottom: 8px; font-size: 12px;
+  }
+  .hidden { display: none; }
+  .job { justify-content: flex-start; gap: 10px; margin: 6px 0 10px; }
+  .job .meta { white-space: normal; }
+
+  /* ---- settings form ---- */
+  fieldset {
+    border: 1px solid var(--line); border-radius: 5px; background: var(--panel);
+    margin: 0 0 8px; padding: 8px 9px 9px;
+  }
+  legend {
+    font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; padding: 0 4px;
+  }
+  label { display: block; margin-bottom: 7px; }
+  label > span {
+    display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px;
+  }
+  input[type=text], input[type=number], input[type=password] {
+    width: 100%; font-family: var(--font); font-size: 12px; color: var(--ink);
+    background: #12151b; border: 1px solid var(--line); border-radius: 4px;
+    padding: 5px 6px;
+  }
+  input[type=color] {
+    width: 42px; height: 26px; padding: 0; background: none;
+    border: 1px solid var(--line); border-radius: 4px; flex: 0 0 auto;
+  }
+  .colour-pair { display: flex; gap: 6px; align-items: center; }
+  .check { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+  .check input { width: 14px; height: 14px; }
+  .check span { font-size: 12px; color: var(--ink); margin: 0; display: inline; }
+  .hint { font-size: 11px; color: var(--muted); margin: -3px 0 8px; line-height: 1.35; }
+  .saved { color: var(--ok); }
+  .problem { color: var(--warn); }
+  .path { font-size: 10px; color: var(--muted); word-break: break-all; margin-top: 6px; }
+</style>
+
+<div class="tabs">
+  <div class="tab is-on" id="tabShow">Show<span id="liveLamp" class="live-lamp hidden"></span></div>
+  <div class="tab" id="tabSettings">Settings</div>
+</div>
+
+<!-- ============================ SHOW ============================ -->
+<section id="paneShow">
+  <div id="offline" class="offline hidden">Pylon is not responding</div>
+  <div id="workers"></div>
+
+  <div class="row job">
+    <button id="setup">Set up OBS</button>
+    <span id="setupNote" class="meta"></span>
+  </div>
+
+  <button id="stop" class="wide stop">Stop Pylon</button>
+</section>
+
+<!-- ============================ SETTINGS ============================ -->
+<section id="paneSettings" class="hidden">
+  <div id="settingsProblems" class="offline hidden"></div>
+
+  <fieldset>
+    <legend>Show</legend>
+    <label><span>Name</span><input type="text" id="show_name" placeholder="Thursday Night Racing"></label>
+    <label><span>Short name</span><input type="text" id="show_tag" placeholder="TNR"></label>
+    <label><span>Round line</span><input type="text" id="show_round" placeholder="Round 4"></label>
+    <label><span>Subtitle on the starting card</span><input type="text" id="show_subtitle" placeholder="Circuit of the Americas"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Look</legend>
+    <label><span>Colour</span>
+      <span class="colour-pair">
+        <input type="color" id="look_colour_pick">
+        <input type="text" id="look_colour" placeholder="#38BDF8">
+      </span>
+    </label>
+    <label><span>Logo</span><input type="text" id="look_logo" placeholder="brand/my-logo.svg"></label>
+    <div class="hint">Put the file in Pylon's overlays/brand folder, or paste a web
+      address. With none, your show's name is drawn as type.</div>
+    <div class="check"><input type="checkbox" id="look_tower"><span>Show the timing tower</span></div>
+    <div class="check"><input type="checkbox" id="look_bug"><span>Show the logo in the corner</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Race coverage</legend>
+    <div class="check"><input type="checkbox" id="director_replays"><span>Roll replays after a crash</span></div>
+    <label><span>Cameras</span><input type="text" id="director_angles" placeholder="tv"></label>
+    <label><span>Favourite car numbers</span><input type="text" id="director_favourites" placeholder="64, 17"></label>
+    <div class="hint">Cars on this list get more screen time than their position alone earns.</div>
+    <label><span>Shortest shot (seconds)</span><input type="number" id="director_min_shot" step="0.5" min="1"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>OBS</legend>
+    <div class="check"><input type="checkbox" id="obs_scenes"><span>Let Pylon switch scenes</span></div>
+    <label><span>Transition</span><input type="text" id="obs_transition" placeholder="Fade"></label>
+    <label><span>Password</span><input type="password" id="obs_password" placeholder="found automatically"></label>
+    <div class="hint">Leave the password empty unless OBS is on another PC: Pylon reads
+      it from OBS itself.</div>
+    <label><span>Stream server</span><input type="text" id="obs_stream_server" placeholder="leave empty to keep what OBS has"></label>
+    <label><span>Stream key</span><input type="password" id="obs_stream_key"></label>
+  </fieldset>
+
+  <button id="save" class="wide">Save settings</button>
+  <div id="saveNote" class="hint"></div>
+  <div class="hint">Saved settings reach the overlay when it restarts: use the restart
+    button on the timing tower's row.</div>
+  <div class="path" id="cfgPath"></div>
+</section>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const workersEl = $('workers');
+  const offlineEl = $('offline');
+  const stopEl = $('stop');
+  const setupEl = $('setup');
+  const setupNote = $('setupNote');
+
+  // ---- tabs ----
+  // The Settings form is loaded when the tab is OPENED and at no other time. A poll
+  // that refreshed it would overwrite whatever someone is halfway through typing.
+  function showTab(settings) {
+    $('tabShow').classList.toggle('is-on', !settings);
+    $('tabSettings').classList.toggle('is-on', settings);
+    $('paneShow').classList.toggle('hidden', settings);
+    $('paneSettings').classList.toggle('hidden', !settings);
+    if (settings) loadSettings();
+  }
+  $('tabShow').onclick = () => showTab(false);
+  $('tabSettings').onclick = () => showTab(true);
+
+  // ---- the OBS setup job ----
+  setupEl.onclick = async () => {
+    setupEl.disabled = true;
+    await fetch('/api/obs-setup', { method: 'POST' }).catch(() => {});
+  };
+
+  function renderSetup(s) {
+    if (!s) { setupNote.textContent = ''; return; }
+    setupEl.disabled = !!s.running;
+    if (s.running) { setupNote.textContent = 'working...'; return; }
+    if (s.ok === null) { setupNote.textContent = 'builds the scenes and sources'; return; }
+    const first = (s.lines || [])[0] || '';
+    setupNote.textContent = (s.ok ? 'done' : 'FAILED') + (first ? ' · ' + first.trim() : '');
+    setupNote.title = (s.lines || []).join('\n');
+  }
+
+  // Stop ends the broadcast, so it takes two clicks: the first only arms it, and the
+  // arming lapses on its own. A dock is somewhere you click by accident.
+  let armedUntil = 0;
+  stopEl.onclick = async () => {
+    const now = Date.now();
+    if (now > armedUntil) {
+      armedUntil = now + 4000;
+      stopEl.textContent = 'Really stop? (click again)';
+      stopEl.classList.add('armed');
+      setTimeout(() => {
+        if (Date.now() > armedUntil) {
+          stopEl.textContent = 'Stop Pylon';
+          stopEl.classList.remove('armed');
+        }
+      }, 4100);
+      return;
+    }
+    armedUntil = 0;
+    stopEl.textContent = 'stopping...';
+    stopEl.classList.remove('armed');
+    stopEl.disabled = true;
+    await fetch('/api/stop', { method: 'POST' }).catch(() => {});
+  };
+
+  async function restart(name) {
+    await fetch('/api/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worker: name }),
+    }).catch(() => {});
+    poll();
+  }
+
+  // Worker names are for the person who wrote them; these are for everyone else.
+  const FRIENDLY = {
+    bridge: 'iRacing connection',
+    overlay: 'Timing tower',
+    director: 'Camera director',
+  };
+
+  function render(data) {
+    renderSetup(data.setup);
+    $('liveLamp').classList.toggle('hidden', data.streaming !== true);
+    workersEl.innerHTML = '';
+    for (const w of data.workers) {
+      // Three states worth distinguishing, because they need different actions:
+      // serving, running-but-not-serving (the wedged case), and given up.
+      let cls = 'bad', note = 'down';
+      if (w.failed) { cls = 'bad'; note = 'given up'; }
+      else if (w.ok && w.listening === null) { cls = 'ok'; note = 'running'; }
+      else if (w.ok) { cls = 'ok'; note = 'serving'; }
+      else if (w.starting) { cls = 'warn'; note = 'starting'; }
+      else if (w.alive) { cls = 'warn'; note = 'not serving'; }
+
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML =
+        `<span class="dot ${cls}"></span>` +
+        `<span class="name"></span>` +
+        `<span class="meta">${note}${w.restarts ? ' &middot; ' + w.restarts + 'x' : ''}</span>`;
+      row.querySelector('.name').textContent = FRIENDLY[w.name] || w.name;
+      const btn = document.createElement('button');
+      btn.textContent = 'restart';
+      btn.onclick = () => restart(w.name);
+      row.appendChild(btn);
+      workersEl.appendChild(row);
+
+      if (w.error) {
+        const e = document.createElement('div');
+        e.className = 'err';
+        e.textContent = w.error;
+        workersEl.appendChild(e);
+      }
+    }
+    if (data.stopping) {
+      stopEl.textContent = 'stopping...';
+      stopEl.disabled = true;
+    }
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/api/status', { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      render(await r.json());
+      offlineEl.classList.add('hidden');
+    } catch (e) {
+      // Blank the rows rather than leaving the last good state on screen: a panel
+      // still showing green while the supervisor is gone is worse than no panel.
+      offlineEl.classList.remove('hidden');
+      workersEl.innerHTML = '';
+    }
+  }
+
+  // ---- settings ----
+  // One list drives both directions, so a field can never be loaded from one place
+  // and saved to another: (element id, table, key, kind).
+  const FIELDS = [
+    ['show_name', 'show', 'name', 'text'],
+    ['show_tag', 'show', 'tag', 'text'],
+    ['show_round', 'show', 'round', 'text'],
+    ['show_subtitle', 'show', 'subtitle', 'text'],
+    ['look_colour', 'look', 'colour', 'text'],
+    ['look_logo', 'look', 'logo', 'text'],
+    ['look_tower', 'look', 'tower', 'bool'],
+    ['look_bug', 'look', 'bug', 'bool'],
+    ['director_replays', 'director', 'replays', 'bool'],
+    ['director_angles', 'director', 'angles', 'text'],
+    ['director_favourites', 'director', 'favourites', 'list'],
+    ['director_min_shot', 'director', 'min_shot', 'number'],
+    ['obs_scenes', 'obs', 'scenes', 'bool'],
+    ['obs_transition', 'obs', 'transition', 'text'],
+    ['obs_password', 'obs', 'password', 'text'],
+    ['obs_stream_server', 'obs', 'stream_server', 'text'],
+    ['obs_stream_key', 'obs', 'stream_key', 'text'],
+  ];
+
+  function showProblems(probs) {
+    const box = $('settingsProblems');
+    box.classList.toggle('hidden', !probs || probs.length === 0);
+    box.textContent = (probs || []).join('  ');
+  }
+
+  async function loadSettings() {
+    let doc;
+    try {
+      const r = await fetch('/api/settings', { cache: 'no-store' });
+      if (!r.ok) throw new Error(r.status);
+      doc = await r.json();
+    } catch (e) {
+      $('saveNote').textContent = 'could not read the settings';
+      $('saveNote').className = 'hint problem';
+      return;
+    }
+    const s = doc.settings || {};
+    for (const [id, table, key, kind] of FIELDS) {
+      const el = $(id);
+      const v = (s[table] || {})[key];
+      if (v === undefined) continue;
+      if (kind === 'bool') el.checked = !!v;
+      else if (kind === 'list') el.value = (v || []).join(', ');
+      else el.value = v;
+    }
+    syncColour();
+    $('cfgPath').textContent = doc.path || '';
+    showProblems(doc.problems);
+  }
+
+  // The colour picker and the text box are one value. Typing wins, because someone
+  // pasting a brand hex must not have it quietly changed, and the picker follows
+  // whenever what is typed is something it can show.
+  function syncColour() {
+    const v = $('look_colour').value.trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) $('look_colour_pick').value = v;
+  }
+  $('look_colour').addEventListener('input', syncColour);
+  $('look_colour_pick').addEventListener('input', () => {
+    $('look_colour').value = $('look_colour_pick').value;
+  });
+
+  $('save').onclick = async () => {
+    const patch = {};
+    for (const [id, table, key, kind] of FIELDS) {
+      const el = $(id);
+      patch[table] = patch[table] || {};
+      if (kind === 'bool') patch[table][key] = el.checked;
+      else if (kind === 'list') patch[table][key] = el.value;
+      else if (kind === 'number') patch[table][key] = Number(el.value) || 0;
+      else patch[table][key] = el.value;
+    }
+    const note = $('saveNote');
+    note.textContent = 'saving...';
+    note.className = 'hint';
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const doc = await r.json();
+      if (!r.ok) throw new Error(doc.error || r.status);
+      note.textContent = 'saved';
+      note.className = 'hint saved';
+      showProblems(doc.problems);
+    } catch (e) {
+      note.textContent = 'could not save: ' + e.message;
+      note.className = 'hint problem';
+    }
+  };
+
+  poll();
+  setInterval(poll, 1000);
+</script>

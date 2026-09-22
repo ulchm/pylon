@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual env / uv
+.venv/
+venv/
+
+# Build
+build/
+dist/
+
+# Secrets / local config
+.env
+*.local.toml
+client_secret*.json
+
+# Telemetry captures and replays (can be large; keep out of git by default)
+recordings/
+samples/
+*.ibt
+*.rpy
+*.jsonl
+*.jsonl.gz
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Stinger QuickTime fallbacks: tens of MB, regenerate with
+# `uv run tools/make_transitions.py --mov` on the machine that needs them
+overlays/transitions/*.mov
+
+# Build output
+dist/
+packaging/Output/

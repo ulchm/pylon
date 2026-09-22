@@ -1,0 +1,44 @@
+name: ci
+
+# Tests + lint, run BY HAND ONLY (Actions tab -> ci -> Run workflow, or `gh workflow
+# run ci`). It used to run on every push, and with one push per commit that burned
+# metered Actions minutes for a single-developer repo whose author runs the same two
+# commands locally before every push (2026-09-21):
+#
+#     uv run ruff check . && uv run pytest -q
+#
+# Everything here is platform-agnostic Python: the Win32-locked surface is one thin
+# pyirsdk wrapper (camera/sdk.py), unit-tested against a fake, so the whole suite runs
+# on Linux with no sim, no Wine, and no display (DESIGN.md sections 2 and 12).
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-uv is pinned to a full version on purpose: from v8 it publishes
+      # immutable releases and no longer moves floating major/minor tags, so
+      # `@v9` does not resolve at all.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      # uv.lock pins ruff too, which matters: ruff's default rule set widens between
+      # releases, so an unpinned lint would start failing on its own schedule.
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Tests
+        run: uv run pytest -q

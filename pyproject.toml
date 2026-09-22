@@ -1,0 +1,45 @@
+[project]
+name = "pylon"
+version = "1.0.0"
+description = "Automatic iRacing broadcast director: it watches the race, points the cameras and runs the overlay"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "pyirsdk",
+    "pyyaml",
+    "websockets",
+    "obsws-python",
+    # Windows Python ships no zoneinfo database.
+    "tzdata",
+]
+
+[project.scripts]
+pylon = "pylon.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pylon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+# Standalone Windows capture tools: deliberate defensive catches + shebangs.
+"tools/**" = ["BLE001", "S110", "EXE001"]
+# The PyInstaller spec is exec'd by PyInstaller with its own globals injected.
+"packaging/*.spec" = ["F821", "EXE001"]

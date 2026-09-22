@@ -1,0 +1,360 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Pylon holding cards</title>
+<!--
+  Full-frame holding cards, for the parts of a broadcast where there is
+  nothing to show: before the green flag, after the chequer, and any gap in
+  between.
+
+  These are SCENES, not transitions. `pylon obs-setup` provisions one OBS
+  scene per card, each holding a single 1920x1080 Browser Source and no NDI:
+  the whole point is that the sim has nothing worth pointing at. You cut to
+  one the way you cut to any scene; the stingers in ../transitions/ are what
+  makes that cut look deliberate.
+
+  This is one page, not four, because the four cards differ only in their
+  words. Pick one with ?card=, and override any line if you want to:
+
+    cards.html?card=soon
+    cards.html?card=soon&in=900        15-minute countdown from load
+    cards.html?card=soon&at=15:00      countdown to the next 15:00 local
+    cards.html?card=soon&at=2026-07-26T15:00        an exact local time
+    cards.html?card=soon&at=2026-07-26T19:00Z       an exact UTC time
+    cards.html?card=complete
+    cards.html?card=intermission
+    cards.html?card=standby&title=TECHNICAL%20DIFFICULTIES
+    cards.html?card=soon&eyebrow=ROUND%207&sub=CIRCUIT%20OF%20THE%20AMERICAS
+    cards.html?card=soon&track=cota          a circuit behind the card
+    cards.html?card=soon&track=              no circuit, whatever else says
+
+  Every string is overridable: ?eyebrow= ?title= ?sub=. An empty value hides
+  that line, so ?sub= gives a card with no subtitle rather than the preset one.
+
+  THE SHOW'S OWN WORDS COME FROM THE SETTINGS, not from the URL. On load the
+  card asks /show.json (served by overlay/transport.py, which reads the
+  operator's config.toml) and fills in the name, the round line, the subtitle
+  and the brand colour. An explicit parameter still wins, and a card on a
+  machine with nothing configured is exactly the card this file draws on its
+  own, which is the ordinary first-run case and not a degraded one.
+
+  A circuit drawing can go behind the card with ?track=<name>, matching a file
+  in tracks/. Those drawings are OpenStreetMap geometry under the Open Database
+  Licence: the credit under one is REQUIRED and is drawn by the same code that
+  draws the circuit, so one cannot appear without the other. Do not separate
+  them.
+
+  Colours are copies of broadcast-overlay.html's tokens; keep them in step. The
+  artwork is the same SVG the overlay's corner bug uses, so a viewer who sat
+  through the countdown recognises the mark in the corner of the race.
+-->
+<style>
+  :root {
+    --font-cond: "Bahnschrift", "DIN Alternate", "DIN Condensed", "Oswald",
+      "Roboto Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+    /* Overwritten at load from /show.json (look.colour). These are the
+       defaults a card draws with when nothing is configured. */
+    --brand: #38BDF8;
+    --brand-lift: #7DD3FC;
+    --brand-deep: #0369A1;
+    --ink: #f3f4f6;
+    --muted: #9ca3af;
+    --line: color-mix(in srgb, var(--brand) 18%, transparent);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+
+  body {
+    font-family: var(--font-cond);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(120% 90% at 78% 12%,
+        color-mix(in srgb, var(--brand-deep) 26%, #0f131c) 0%, #0a0d14 45%, #06080d 100%),
+      linear-gradient(180deg, #0d1119 0%, #06080d 100%);
+  }
+
+  /* the overlay's own backdrop furniture, so a card and the race read as one
+     graphics package rather than two designs that happen to share a logo */
+  .streaks, .vignette, .grain { position: fixed; inset: 0; pointer-events: none; }
+  .streaks {
+    inset: -20%;
+    background: repeating-linear-gradient(
+      -24deg, transparent 0 60px,
+      color-mix(in srgb, var(--brand) 9%, transparent) 60px 61px,
+      transparent 61px 130px);
+    animation: streak 9s linear infinite;
+  }
+  @keyframes streak { to { transform: translateX(130px); } }
+  .vignette { background: radial-gradient(130% 120% at 30% 40%, transparent 40%, rgba(0,0,0,0.62) 100%); }
+  .grain {
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* The circuit, behind everything. A holding card is the one place in the
+     broadcast with room for a picture, and the shape of the track is the most
+     specific thing that can be said about the afternoon before the cars run.
+
+     Centred rather than offset: a circuit outline is a loop with a hollow
+     middle, so the type sits in the hole rather than fighting the drawing. Low
+     enough in opacity to stay furniture (it is a backdrop, not the hero; the
+     mark is the hero), and UNDER the vignette, so the corners fall away with
+     the rest of the frame instead of the circuit being the one thing that does
+     not. */
+  .card__circuit {
+    position: fixed; inset: 0; margin: auto;
+    height: 94vh; width: auto; max-width: none;
+    opacity: 0.15;
+    pointer-events: none;
+  }
+
+  /* The OpenStreetMap credit. Small, quiet, and not optional: see the note at
+     the top of this file and overlays/tracks/README.md. It is only ever in the
+     DOM when a circuit is, because the script adds both together. */
+  .card__credit {
+    position: fixed; left: 26px; bottom: 20px;
+    font-size: 12px; letter-spacing: 0.08em; font-weight: 500;
+    color: var(--muted); opacity: 0.75;
+  }
+
+  .card {
+    position: relative;
+    height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 30px;
+    text-align: center;
+  }
+  /* Sized by HEIGHT, not width, so any logo an operator points at this holds
+     the same visual weight whether it is a square badge or a long wordmark. */
+  .card__mark { height: 232px; max-width: 70vw; object-fit: contain; display: block; }
+  .card__mark[hidden] { display: none; }
+
+  /* The show's name when there is no logo, which is the common case: a name
+     typed into the settings is a complete identity and needs no art at all.
+     Letterspaced caps in the brand colour, sitting where a mark would sit. */
+  .card__name {
+    font-size: 40px; font-weight: 800; letter-spacing: 0.3em; text-transform: uppercase;
+    color: var(--brand-lift);
+    line-height: 1.1; max-width: 80vw;
+  }
+  .card__name:empty { display: none; }
+
+  .card__eyebrow {
+    font-size: 21px; font-weight: 700; letter-spacing: 0.42em; text-transform: uppercase;
+    /* small letterspaced caps: the lift, same rule as the overlay's --thead__r */
+    color: var(--brand-lift);
+    margin-bottom: -14px;
+  }
+  .card__eyebrow:empty { display: none; }
+
+  /* the headline leans with the mark. skewX matches .pos in the overlay and
+     the 8 degrees baked into the lockup's own type. */
+  .card__title {
+    font-size: 92px; font-weight: 800; letter-spacing: 0.03em; line-height: 1;
+    text-transform: uppercase;
+    transform: skewX(-8deg);
+  }
+
+  .card__clock {
+    display: flex; align-items: baseline; gap: 14px;
+    font-variant-numeric: tabular-nums;
+    font-size: 108px; font-weight: 800; letter-spacing: 0.01em; line-height: 1;
+    color: var(--brand);
+    transform: skewX(-8deg);
+  }
+  .card__clock:empty { display: none; }
+  .card__clock.is-done { color: var(--ink); font-size: 64px; letter-spacing: 0.2em; }
+
+  .card__rule {
+    width: 300px; height: 2px; background: var(--brand); opacity: 0.75;
+    transform: skewX(-8deg);
+  }
+
+  .card__sub {
+    font-size: 25px; font-weight: 600; letter-spacing: 0.3em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .card__sub:empty { display: none; }
+
+  @media (prefers-reduced-motion: reduce) { .streaks { animation: none; } }
+</style>
+</head>
+<body>
+<div class="streaks"></div>
+<div id="circuitSlot"></div>
+<div class="vignette"></div>
+<div class="grain"></div>
+
+<div class="card">
+  <img class="card__mark" id="mark" alt="" hidden>
+  <div class="card__name" id="name"></div>
+  <div class="card__eyebrow" id="eyebrow"></div>
+  <div class="card__title" id="title"></div>
+  <div class="card__clock" id="clock"></div>
+  <div class="card__rule"></div>
+  <div class="card__sub" id="sub"></div>
+</div>
+
+<script>
+const q = new URLSearchParams(location.search);
+
+// The four cards. Only the words differ; `done` is what the countdown line
+// becomes once it reaches zero, which is the moment the card is about to be
+// cut away from anyway.
+//
+// `venue` is whether the operator's subtitle belongs on this card. It is
+// declared per card rather than guessed at, because the guess is wrong: the
+// obvious heuristic ("use the subtitle wherever there is one") turned "Race
+// Complete / Thanks for watching" into "Race Complete / Circuit of the
+// Americas" and threw away the only line on that card addressed to anybody.
+// Waiting for a race is about where the race is; the end of one is not.
+//
+// The circuit DRAWING appears on all four regardless. It is backdrop, and it is
+// as true after the chequer as before the green.
+const CARDS = {
+  soon:         { title: "Starting Soon",  sub: "Coverage begins shortly", done: "Any moment now", venue: true },
+  complete:     { title: "Race Complete",  sub: "Thanks for watching",     done: "",               venue: false },
+  intermission: { title: "Back Shortly",   sub: "Stay tuned",              done: "Any moment now", venue: true },
+  standby:      { title: "Standby",        sub: "",                        done: "",               venue: false },
+};
+const card = CARDS[q.get("card")] || CARDS.soon;
+
+// A present-but-empty param (?sub=) means "hide this line", which is different
+// from an absent one meaning "use the preset". `has` is what tells them apart.
+const pick = (name, fallback) => (q.has(name) ? q.get(name) : fallback);
+
+document.getElementById("eyebrow").textContent = pick("eyebrow", "");
+document.getElementById("title").textContent = pick("title", card.title);
+document.getElementById("sub").textContent = pick("sub", card.sub);
+
+// ---- the show's own words, from the settings ----
+// /show.json is served by overlay/transport.py out of the operator's config and
+// is {} whenever there is none. Everything below is therefore written to do
+// nothing at all in that case, which is also what happens if the fetch fails:
+// this card has to come up on a machine that has been configured with nothing
+// and still look like a deliberate holding card.
+//
+// An explicit parameter always wins. `pick` already distinguishes "absent" from
+// "present and empty", so ?sub= still means "no subtitle" even when the config
+// has one to offer, and ?track= means "no circuit".
+(async () => {
+  let doc = {};
+  try {
+    const res = await fetch("show.json", { cache: "no-store" });
+    if (res.ok) doc = await res.json();
+  } catch { /* nothing configured. The card stands on its own. */ }
+
+  if (doc.colour) {
+    // One colour in the settings, three tokens here: the mixes are what keep a
+    // pale brand readable on a dark card and a dark one from disappearing into
+    // it. color-mix does the work so the operator only ever picks one colour.
+    const root = document.documentElement.style;
+    root.setProperty("--brand", doc.colour);
+    root.setProperty("--brand-lift", `color-mix(in srgb, ${doc.colour} 65%, white)`);
+    root.setProperty("--brand-deep", `color-mix(in srgb, ${doc.colour} 60%, black)`);
+  }
+
+  // The logo, or the show's name set as type. A show with neither gets the card
+  // with no furniture above the title, which is a clean card and not a broken
+  // one. A logo that fails to load falls back to the name for the same reason:
+  // a broken-image glyph across a full-frame card is the worst of the three.
+  const mark = document.getElementById("mark");
+  const name = document.getElementById("name");
+  const logo = pick("mark", doc.logo || "");
+  const showName = doc.name || "";
+  const asType = () => { if (showName) { name.textContent = showName; } };
+  if (logo) {
+    mark.addEventListener("error", () => { mark.remove(); asType(); });
+    mark.addEventListener("load", () => { mark.hidden = false; });
+    mark.alt = showName;
+    mark.src = logo;
+  } else {
+    asType();
+  }
+
+  if (!q.has("eyebrow") && doc.round) {
+    document.getElementById("eyebrow").textContent = String(doc.round).toUpperCase();
+  }
+  // The operator's own subtitle, on the cards that declared they want a venue
+  // line. "Race Complete / Thanks for watching" must keep the line addressed to
+  // somebody, which is why this is per card rather than guessed at.
+  if (!q.has("sub") && card.venue && doc.subtitle) {
+    document.getElementById("sub").textContent = doc.subtitle.toUpperCase();
+  }
+
+  // The drawing and its credit go in together, or neither does. A missing file
+  // removes both rather than leaving an OpenStreetMap credit under nothing, or
+  // a broken-image glyph across a full-frame card.
+  const slug = q.get("track") || "";
+  if (!slug) return;
+  const img = new Image();
+  img.className = "card__circuit";
+  img.alt = "";
+  img.addEventListener("load", () => {
+    document.getElementById("circuitSlot").replaceWith(img);
+    const credit = document.createElement("div");
+    credit.className = "card__credit";
+    credit.textContent = "\u00A9 OpenStreetMap contributors";
+    document.body.appendChild(credit);
+  });
+  img.src = `tracks/${slug}.svg`;
+})();
+
+// ---- optional countdown ----
+// ?at=<anything Date can parse> counts to a wall-clock instant; ?in=<seconds>
+// counts from page load, which is the one to use when the stream starts "in
+// about twenty minutes" rather than at a fixed time.
+const clock = document.getElementById("clock");
+
+// `at` takes either a bare clock time ("15:00", meaning the next time the
+// clock reads that HERE, rolling to tomorrow if it has already gone), or any
+// full timestamp Date can parse.
+//
+// "Here" is the machine running OBS, so a bare time and an offset-less
+// timestamp both mean local wall-clock. Two things to know if you write a full
+// one: a date on its own ("2026-07-26") is read as UTC by the language, not
+// local, so always include a time; and US Eastern is -04:00 in summer, so
+// writing -05:00 because someone said "EST" in July puts the clock an hour out.
+function parseAt(v) {
+  const hhmm = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(v);
+  if (hhmm) {
+    const d = new Date();
+    d.setHours(Number(hhmm[1]), Number(hhmm[2]), 0, 0);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : t;
+}
+
+let target = null;
+if (q.has("at")) {
+  target = parseAt(q.get("at"));
+} else if (q.has("in")) {
+  const secs = Number(q.get("in"));
+  if (Number.isFinite(secs)) target = Date.now() + secs * 1000;
+}
+
+function tick() {
+  if (target === null) return;
+  const left = Math.max(0, Math.round((target - Date.now()) / 1000));
+  if (left === 0) {
+    clock.classList.add("is-done");
+    clock.textContent = card.done;
+    return;                                  // stop: nothing left to count
+  }
+  const h = Math.floor(left / 3600);
+  const m = Math.floor((left % 3600) / 60);
+  const s = left % 60;
+  clock.textContent = h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+  setTimeout(tick, 250);                     // 4 Hz: never shows a stale second
+}
+tick();
+</script>
+</body>
+</html>
