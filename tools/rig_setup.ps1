@@ -30,7 +30,8 @@ param(
     [string]$Dest = "$env:USERPROFILE\Code\pylon",
     [string]$ShowName = "Pylon Test",
     [string]$ShowTag = "PylonTest",
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$NoShortcut
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,10 +134,18 @@ control_port = 8882
     Pop-Location
 }
 
+# --- 5. the Desktop shortcut -------------------------------------------------
+# Starting a broadcast should be a double-click, not a remembered command.
+if (-not $NoShortcut) {
+    Step "putting Pylon on the Desktop"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$Dest\tools\make_shortcut.ps1" -Root $Dest
+}
+
 Write-Host ""
-Step "ready. To run it, FROM THE CONSOLE SESSION (not over SSH):"
+Step "ready. Double-click PYLON on the Desktop, from the console session."
+Step "(or, in a terminal there:)"
 Write-Host "    cd $Dest"
-Write-Host "    uv run python -m pylon studio"
+Write-Host "    uv run pylon studio"
 Write-Host ""
 Step "then in OBS add a Custom Browser Dock pointing at:"
 Write-Host "    http://127.0.0.1:8882/"

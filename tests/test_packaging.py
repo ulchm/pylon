@@ -160,9 +160,29 @@ def test_ctrl_c_is_not_a_crash(monkeypatch):
 
 # --- the build files themselves --------------------------------------------------
 
-@pytest.mark.parametrize("name", ["pylon.spec", "pylon.iss", "launcher.py", "README.md"])
+@pytest.mark.parametrize("name", ["pylon.spec", "pylon.iss", "launcher.py", "README.md",
+                                  "pylon.ico"])
 def test_the_build_files_are_present(name):
     assert (Path(__file__).resolve().parent.parent / "packaging" / name).is_file()
+
+
+def test_the_icon_carries_the_sizes_windows_actually_draws():
+    """Windows picks the nearest embedded size and scales if it has to. 16 and 32 are
+    what the taskbar and a Desktop shortcut use, so an icon holding only 256 looks
+    like a blurry smudge in exactly the two places anyone sees it."""
+    ico = (Path(__file__).resolve().parent.parent / "packaging" / "pylon.ico").read_bytes()
+    assert ico[:4] == b"\x00\x00\x01\x00", "not an ICO"
+    count = int.from_bytes(ico[4:6], "little")
+    # Each directory entry is 16 bytes; byte 0 is the width, 0 meaning 256.
+    widths = {ico[6 + i * 16] or 256 for i in range(count)}
+    assert {16, 32, 256} <= widths, widths
+
+
+@pytest.mark.parametrize("script", ["make_shortcut.ps1", "studio.bat", "doctor.bat"])
+def test_the_source_checkout_launchers_are_present(script):
+    """What a Desktop shortcut points at. Without these, running from a clone means
+    remembering a command, which is the thing the shortcut exists to avoid."""
+    assert (Path(__file__).resolve().parent.parent / "tools" / script).is_file()
 
 
 def test_the_spec_ships_the_overlays_and_the_lazy_imports():

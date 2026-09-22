@@ -24,21 +24,22 @@ OBS on your own PC, and nothing leaves it.
 
 **You need:** Windows, iRacing, and [OBS](https://obsproject.com/) 28 or newer.
 
-1. **[Download the installer](../../releases/latest)** and run it. It installs for
-   you alone, so there is no administrator prompt.
+> **There is no installer yet.** Pylon runs from a source checkout today, which
+> takes about five minutes and two commands. [Run it from source](#run-it-from-source)
+> has the whole thing, then come back here at step 2. When there is a build, step 1
+> becomes downloading it.
 
-   Windows will say **"Windows protected your PC"**. That is SmartScreen telling you
-   the file is not signed, which is true: a signing certificate is a recurring bill,
-   and this is free software. Click **More info**, then **Run anyway**. If you would
-   rather not, the portable zip on the same page is the same program in a folder, and
-   you can read every line of source in this repository.
+1. **Install it.** Either [from source](#run-it-from-source) (the only way right
+   now) or, once builds exist, from the releases page.
 
 2. **Turn on OBS's WebSocket server.** In OBS: *Tools → WebSocket Server
    Settings → Enable WebSocket server → OK*. This is the only thing you have to
    switch on by hand, and Pylon reads the password from OBS itself.
 
-3. **Start Pylon** from the desktop shortcut. A console window opens and stays
-   open: that is the log, and it is where anything that goes wrong explains itself.
+3. **Start Pylon.** From a source checkout that is `uv run pylon studio`; from an
+   installed copy it is the desktop shortcut. Either way a console window opens and
+   stays open: that is the log, and it is where anything that goes wrong explains
+   itself. Leave it running.
 
 4. **Add the control panel to OBS.** In OBS: *View → Docks → Custom Browser
    Docks*, name it `Pylon`, paste `http://127.0.0.1:8782/`, click Apply. Dock it
@@ -50,9 +51,13 @@ OBS on your own PC, and nothing leaves it.
 6. **Join a session as a spectator** and watch the panel. When the three lamps are
    green, go to your race scene in OBS and hit Start Streaming.
 
-If something is not right, the panel says so, and `Pylon.exe doctor` (there is a
-Start menu shortcut for it) checks everything at once and tells you the one thing
-to do next.
+If something is not right, the panel says so, and the doctor checks everything at
+once and tells you the one thing to do next:
+
+```
+uv run pylon doctor          # from a source checkout
+Pylon.exe doctor             # from an installed copy (also a Start menu shortcut)
+```
 
 ### Running Pylon beside another broadcaster
 
@@ -193,14 +198,91 @@ Pylon.exe bridge --sdk --live --record my-race.jsonl.gz
 
 ---
 
-## For developers
+## Run it from source
+
+This is how you run Pylon today, and it is the same on the PC you broadcast from
+and on a machine you only want to poke at it with. Two commands plus a clone.
+
+### 1. Install uv
+
+[uv](https://docs.astral.sh/uv/) fetches the right Python and builds the
+environment, so you do not have to install Python yourself or think about
+virtualenvs.
+
+**Windows** (PowerShell):
+
+```powershell
+winget install --id=astral-sh.uv -e
+```
+
+**Linux or macOS**:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen your terminal afterwards so `uv` is on the PATH.
+
+### 2. Clone and build
 
 ```
-git clone <this repo> && cd pylon
+git clone https://github.com/ulchm/pylon.git
+cd pylon
 uv sync
-uv run pytest -q
-uv run ruff check .
 ```
+
+`uv sync` reads `uv.lock` and makes a `.venv` in the checkout with exactly the
+pinned versions. It takes a few seconds and downloads about thirty megabytes.
+Nothing is installed system-wide and nothing outside this folder is touched.
+
+Check it worked:
+
+```
+uv run pylon doctor
+```
+
+That reports on your settings, OBS, the scenes, iRacing and the ports, and every
+failure comes with the one next thing to do. On a machine with no OBS running,
+one FAIL line about OBS is the expected answer.
+
+### 3. Put it on the Desktop (Windows)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\make_shortcut.ps1
+```
+
+That makes two shortcuts: **Pylon**, which starts the show, and **Pylon - Check my
+setup**, which runs the doctor and holds the window open. Both point into this
+checkout, so a `git pull` updates what they launch.
+
+You do not have to: `uv run pylon studio` in the checkout does the same thing.
+
+### 4. Carry on from step 2 of [Getting started](#getting-started)
+
+Turn on OBS's WebSocket server, start Pylon, add the control panel to OBS, and
+click **Set up OBS**.
+
+### Updating
+
+```
+git pull
+uv sync
+```
+
+Your settings live in `%LOCALAPPDATA%\Pylon` (Windows) or `~/.config/pylon`
+(Linux), outside the checkout, so pulling never touches them.
+
+### Where things are
+
+| | |
+| --- | --- |
+| Settings | `%LOCALAPPDATA%\Pylon\config.toml`, or `uv run pylon config --edit` |
+| Logs | `%LOCALAPPDATA%\Pylon\logs\` |
+| Your logo | drop it in `overlays/brand/` and name it in Settings |
+
+---
+
+## For developers
 
 Development happens on Linux against recordings. The only component that must run
 on Windows is the SDK bridge: reading live telemetry is a Windows memory-mapped
@@ -211,13 +293,34 @@ no sim and no display.
 Windows means a real Windows PC, not Wine or Proton: iRacing's anti-cheat ships no
 Linux module, so the sim will not launch under Wine at all, replays included.
 
-Offline, against a recording:
+```
+uv run pytest -q          the suite: 600-odd tests, about a minute
+uv run ruff check .       the linter
+```
+
+Both are the gate. Run them before you push.
+
+Some of the tests drive a real headless Chrome against the overlay pages, and skip
+themselves when there is no Chrome to find. To include them, point at one:
 
 ```
-pylon synth out.jsonl.gz          make a synthetic race to test against
-pylon direct FILE                 dry-run the director, print the shot list
-pylon story FILE                  the world model's view: battles, incidents, events
-pylon overlay FILE                preview the timing tower in a browser
+PYLON_CHROME=/path/to/chrome uv run pytest -q
+```
+
+Offline, against a recording, no sim needed:
+
+```
+uv run pylon synth out.jsonl.gz   make a synthetic race to test against
+uv run pylon direct FILE          dry-run the director, print the shot list
+uv run pylon story FILE           the world model's view: battles, incidents, events
+uv run pylon overlay FILE         preview the timing tower in a browser
+```
+
+A capture off a real session is worth far more than a synthetic one, and it is how
+almost everything in `DESIGN.md` section 14 was found:
+
+```
+uv run pylon bridge --sdk --live --record my-race.jsonl.gz
 ```
 
 ### How it fits together
