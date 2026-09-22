@@ -271,6 +271,9 @@ document.getElementById("sub").textContent = pick("sub", card.sub);
     mark.addEventListener("load", () => { mark.hidden = false; });
     mark.alt = showName;
     mark.src = logo;
+    // A cached 404 can settle before the listeners above are reached, and then
+    // neither fires: a finished image with no width is one that failed.
+    if (mark.complete && mark.naturalWidth === 0) { mark.remove(); asType(); }
   } else {
     asType();
   }

@@ -5,9 +5,13 @@ build and tune the director on Linux before any live capture exists. It is also
 the only way to get *deterministic* scenarios (a specific battle, a specific
 incident) to assert against.
 
-It is fully self-contained: it generates its own roster (numbers/names are
-cosmetic and irrelevant to the director) and emits the same real `CarIdx*`
-channel shapes the live SDK produces. The real roster/track will come from the
+It is fully self-contained: it generates its own roster and emits the same real
+`CarIdx*` channel shapes the live SDK produces. The names and countries are
+INVENTED, and they matter more than they look: the tower resolves three-letter
+codes from surnames, breaks ties between two drivers who share one, truncates
+what will not fit and draws a flag per country. A field of "Driver 1" exercises
+none of that, so the graphics looked fine offline and met their first real
+surname on air. The real roster/track will come from the
 live session YAML at capture time; nothing here depends on an external seed.
 
 Scenario baked in (deterministic given `seed`):
@@ -33,6 +37,36 @@ from .frame import Frame, SessionInfo
 _NUMBER_POOL = [
     "1", "2", "3", "4", "5", "7", "9", "11", "14", "16", "18", "23", "24",
     "27", "33", "44", "51", "63", "77", "88", "99", "00", "01", "08",
+]
+
+# An invented grid. Ordinary given names and surnames from several countries,
+# combined so that nobody here is anybody: this ships in a public repository and
+# a synthetic field must not read as a real person's result.
+#
+# Two pairs share a surname prefix on purpose (Halvorsen/Halloran, van der
+# Meer/van Dijk), because a tower that has never had to separate two drivers
+# with one three-letter code has never been tested (see overlay.identity).
+_ROSTER = [
+    ("Anders Halvorsen", "Norway"),        ("Bea Halloran", "Ireland"),
+    ("Casper van der Meer", "Netherlands"), ("Dana van Dijk", "Netherlands"),
+    ("Elio Marchetti", "Italy"),           ("Frida Lindqvist", "Sweden"),
+    ("Gabriel Okonkwo", "Nigeria"),        ("Hana Suzuki", "Japan"),
+    ("Ivan Petrov", "Bulgaria"),           ("Jules Lemaire", "France"),
+    ("Kai Brennan", "Australia"),          ("Lena Fischer", "Germany"),
+    ("Mateo Alvarez", "Spain"),            ("Nadia Haddad", "Morocco"),
+    ("Oscar Whitfield", "United Kingdom"), ("Paula Nowak", "Poland"),
+    ("Quinn Lafferty", "Canada"),          ("Rafael Moreira", "Brazil"),
+    ("Sofia Ricci", "Italy"),              ("Tomas Novak", "Czechia"),
+    ("Uma Krishnan", "India"),             ("Viktor Sorensen", "Denmark"),
+    ("Wes Calloway", "United States"),     ("Xiomara Reyes", "Mexico"),
+    ("Yusuf Demir", "Turkey"),             ("Zara Mbeki", "South Africa"),
+    ("Aaron Deveraux", "United States"),   ("Birgit Vogel", "Austria"),
+    ("Cai Wen", "Singapore"),              ("Dmitri Volkov", "Estonia"),
+    ("Esme Laurent", "Belgium"),           ("Finn Gallagher", "Scotland"),
+    ("Greta Molnar", "Hungary"),           ("Hector Salas", "Chile"),
+    ("Ines Ferreira", "Portugal"),         ("Jonas Rautio", "Finland"),
+    ("Kirsten Bauer", "Switzerland"),      ("Liam Doherty", "Ireland"),
+    ("Mira Kovac", "Croatia"),             ("Noah Ellison", "New Zealand"),
 ]
 
 
@@ -83,6 +117,14 @@ class SyntheticSource:
 
         # Force an adjacent mid-field battle: equalise pace of two cars.
         self._battle_pair = None
+        # Running best per car, which has to survive between frames unlike every
+        # other channel here. -1 is the SDK's "no lap yet".
+        self._best_lap = [-1.0] * MAX_CARS
+        # A fixed scatter per car, so a replayed recording is deterministic and two
+        # runs of the same seed produce the same timing screen.
+        self._lap_jitter = [
+            [rng.uniform(-0.45, 0.85) for _ in range(7)] for _ in range(MAX_CARS)
+        ]
         if len(self._cars) >= 8:
             a, b = self._cars[6], self._cars[7]
             b["lap_time"] = a["lap_time"]
@@ -134,7 +176,8 @@ class SyntheticSource:
             d = {
                 "CarIdx": i,
                 "CarNumber": number,
-                "UserName": f"Driver {i + 1}",
+                "UserName": _ROSTER[i % len(_ROSTER)][0],
+                "FlairName": _ROSTER[i % len(_ROSTER)][1],
                 "CarScreenNameShort": cname,
                 "CarClassID": cid,
                 "CarClassShortName": cname,
@@ -209,6 +252,8 @@ class SyntheticSource:
             surf = [TrackSurface.NOT_IN_WORLD] * MAX_CARS
             f2 = [-1.0] * MAX_CARS
             est = [-1.0] * MAX_CARS
+            last = [-1.0] * MAX_CARS
+            best = self._best_lap
 
             order = sorted(self._cars, key=lambda c: dist[c["idx"]], reverse=True)
             leader_dist = dist[order[0]["idx"]] if order else 0.0
@@ -220,6 +265,19 @@ class SyntheticSource:
                 ldp[idx] = (dd % track) / track
                 lap[idx] = completed + 1
                 lapc[idx] = completed
+                # A lap TIME once one is complete. Without these the tower's LAST and
+                # BEST columns are blank, its fastest-lap toast never fires and the
+                # purple treatment on the holder cannot be seen at all, so the whole
+                # timing half of the overlay was undevelopable offline.
+                #
+                # Derived from this car's own pace with a little scatter, and only
+                # from its SECOND lap: a real first lap starts from a standing grid
+                # and is not comparable, which is why the sim reports -1 until then.
+                if completed >= 1:
+                    jitter = self._lap_jitter[idx][completed % len(self._lap_jitter[idx])]
+                    last[idx] = c["lap_time"] + jitter
+                    prev = best[idx]
+                    best[idx] = last[idx] if prev <= 0 else min(prev, last[idx])
                 pos[idx] = p
                 class_rank[c["class_id"]] = class_rank.get(c["class_id"], 0) + 1
                 cpos[idx] = class_rank[c["class_id"]]  # per-class position, as the SDK reports
@@ -262,5 +320,8 @@ class SyntheticSource:
                 "CarIdxTrackSurface": surf,
                 "CarIdxF2Time": f2,
                 "CarIdxEstTime": est,
+                # -1 is how the SDK spells "no lap yet", not 0.
+                "CarIdxLastLapTime": last,
+                "CarIdxBestLapTime": best,
             }
             yield Frame(tick=tick, session_time=t, values=values)

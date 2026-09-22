@@ -460,6 +460,19 @@ def test_the_cap_carries_the_round_from_the_settings(page):
     assert page.eval("document.querySelector('.badge--round').textContent") == "Round 7"
 
 
+def test_an_image_that_already_failed_removes_itself(page):
+    """The iRacing credit is a <img src> in the HTML, and Pylon does not ship the
+    file, so the request fails while the parser is still working. By the time
+    overlay.js runs at the end of <body> that error event has fired and gone, and a
+    listener added then never hears it.
+
+    Seen in a screenshot of the real page: a bordered box reading "iRacing" sat in
+    the corner of every frame. On air that is two hours of a broken-image glyph.
+    """
+    assert page.eval("document.querySelectorAll('.simbug').length") == 0, \
+        "a broken image is still on the page"
+
+
 def test_the_brand_colour_from_the_settings_reaches_the_page(page):
     """One colour in the settings paints the whole overlay: the page writes --brand
     and mixes the other two from it, so an operator never edits CSS."""

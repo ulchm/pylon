@@ -24,12 +24,21 @@
   // iRacing's own logo, which Pylon does not ship (it is their trademark). Present
   // in overlays/brand/, it draws; absent, the whole block goes rather than leaving a
   // broken-image glyph in the corner of the broadcast for two hours.
+  //
+  // The already-failed case is the one that actually happens. This src is in the
+  // HTML, so the request is made and lost while the parser is still working; by the
+  // time this script runs at the end of <body> the error event has FIRED AND GONE,
+  // and a listener added now never hears it. A bordered box reading "iRacing" sat
+  // in the corner of every frame until that was understood, which on air is two
+  // hours of a broken-image glyph. `complete` with a zero naturalWidth is how a
+  // finished-and-failed image reads.
   {
     const sim = document.querySelector(".simbug img");
-    if (sim) sim.addEventListener("error", () => {
-      const box = sim.closest(".simbug") || sim;
-      box.remove();
-    });
+    const drop = () => { (sim.closest(".simbug") || sim).remove(); };
+    if (sim) {
+      sim.addEventListener("error", drop);
+      if (sim.complete && sim.naturalWidth === 0) drop();
+    }
   }
 
   function applyBug(src) {
@@ -37,7 +46,11 @@
     if (!bug) return;
     const chip = bug.closest(".bugchip") || bug;
     bug.addEventListener("error", () => chip.remove());
-    if (src) bug.src = src; else chip.remove();
+    if (!src) { chip.remove(); return; }
+    bug.src = src;
+    // Same already-failed hazard as the sim bug above: a cached 404 can settle
+    // before the listener is reached.
+    if (bug.complete && bug.naturalWidth === 0) chip.remove();
   }
 
   // Tower geometry comes from the stylesheet rather than from a second copy of it. These

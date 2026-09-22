@@ -18,6 +18,16 @@ the truck: it decides the shots.
 No commentary, no voices, no accounts, no cloud. It reads telemetry and talks to
 OBS on your own PC, and nothing leaves it.
 
+![The timing tower over a race, with a battle for the lead in the pop-ins](docs/images/tower.png)
+
+*The timing tower and a battle pop-in. Every graphic here is transparent over the
+sim's own picture in OBS, and the whole thing takes your colour and your name.*
+
+![A holding card counting down to the start, with the circuit behind it](docs/images/card.png)
+
+*A holding card before the green, counting down. There is one for the gap between
+sessions and one for after the chequer, and Pylon cuts to them on its own.*
+
 ---
 
 ## Getting started
@@ -58,6 +68,11 @@ OBS on your own PC, and nothing leaves it.
 
 4. **Find the Pylon dock in OBS**, under *View → Docks*. Drag it wherever suits
    you. This is where you check on the show and change settings.
+
+   <img src="docs/images/panel.png" alt="The Pylon control panel docked in OBS" width="360">
+
+   Three green lamps means it is working. The dot beside **SHOW** lights when OBS
+   starts streaming, so you can see you are live without leaving the panel.
 
 5. **Click "Set up OBS"** in that panel. It builds the scene with your sim capture
    and the timing tower on it, plus three holding cards.
@@ -110,7 +125,10 @@ works perfectly and is the easiest way to see what it does.
 ## Settings
 
 Everything is in the panel's **Settings** tab, and behind it one commented file
-you can open with `Pylon.exe config --edit`:
+you can open with `pylon config --edit`:
+
+<img src="docs/images/panel-settings.png" alt="The Settings tab of the Pylon control panel" width="360">
+
 
 ```
 %LOCALAPPDATA%\Pylon\config.toml

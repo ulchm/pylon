@@ -21,6 +21,9 @@ pylon = "pylon.cli:main"
 dev = [
     "pytest",
     "ruff",
+    # Only for tools/screenshots.py and the one-off icon. NOT a runtime dependency:
+    # the PyInstaller spec excludes PIL, so it never reaches a build.
+    "pillow",
 ]
 
 [build-system]
