@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import pytest
 import websockets
@@ -579,11 +580,18 @@ def test_director_reconnects_after_the_bridge_drops():
             reconnect=0.05, on_connect=lambda info: connects.append(info.track_name),
             on_disconnect=drops.append))
 
-        async def serve_until(controller, n_cmds):
+        async def serve_until(controller, n_cmds, timeout=20.0):
+            # A wall-clock deadline, not a fixed number of 10ms sleeps. Windows'
+            # timer granularity is about 15.6ms, so every sleep here and every
+            # `1/rate` pause in the bridge takes longer than it asks for: counting
+            # iterations budgets a fraction of the frames it does on Linux, and the
+            # director never gets enough of them to make its second cut. That is the
+            # test's pacing, not the product's, which runs at the sim's 60Hz.
             server = BridgeServer(controller=controller, source=_race(),
                                   host="127.0.0.1", port=port, rate=400.0)
             async with server.ws_server():
-                for _ in range(400):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
                     if len(controller.calls) >= n_cmds:
                         return True
                     await asyncio.sleep(0.01)
