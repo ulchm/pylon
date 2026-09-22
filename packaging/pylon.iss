@@ -18,9 +18,18 @@
 ; alone for the same reason; removing them is offered, not assumed.
 
 #define AppName "Pylon"
-#define AppVersion "1.0.0"
+; The version comes from pyproject.toml, passed in by whoever builds:
+;
+;     iscc /DAppVersion=1.2.3 packaging/pylon.iss
+;
+; The release workflow reads it there and passes it here, so there is one source of
+; truth. This fallback is only for a hand build that forgets, and it says so in the
+; filename rather than quietly shipping a wrong number.
+#ifndef AppVersion
+  #define AppVersion "0.0.0-dev"
+#endif
 #define AppPublisher "Pylon"
-#define AppURL "https://github.com/YOURNAME/pylon"
+#define AppURL "https://github.com/ulchm/pylon"
 #define AppExeName "Pylon.exe"
 
 [Setup]

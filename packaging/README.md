@@ -27,10 +27,14 @@ the folder except the settings in `%LOCALAPPDATA%\Pylon`.
 For the installer, then:
 
 ```
-iscc packaging/pylon.iss
+iscc /DAppVersion=1.0.0 packaging/pylon.iss
 ```
 
-which writes `packaging/Output/Pylon-Setup-<version>.exe`.
+which writes `packaging/Output/Pylon-Setup-<version>.exe`. The version is passed in
+because `pyproject.toml` is the only place this project's version is written down;
+the release workflow reads it there and hands it over. Forget the flag and the
+installer is built as `0.0.0-dev`, which is deliberately obvious rather than quietly
+wrong.
 
 ## Before you ship it
 
@@ -74,9 +78,10 @@ trade, so if the warning becomes a problem, take one of these instead:
   downloads accumulate, so a given release warns less over time, though a new
   release starts over.
 
-Three things help regardless of signing, and all are already done here: ship a
-`version_info.txt` so the executable carries version metadata, do not use UPX (the
-spec sets `upx=False`), and publish from a stable URL people can check.
+Three things help regardless of signing, and all are already done here: the
+executable carries version metadata (the spec generates `build/version_info.txt`
+from `pyproject.toml` on every build), UPX is not used (the spec sets `upx=False`),
+and releases come from a stable URL people can check.
 
 If you do get a certificate, sign `dist\Pylon\Pylon.exe` **before** running `iscc`,
 then sign the installer too:
@@ -90,10 +95,14 @@ signtool sign /fd SHA256 /tr <timestamp-url> /td SHA256 packaging\Output\Pylon-S
 Always timestamp (`/tr`). Without it, every signature expires with the certificate
 and old releases start warning again.
 
-## Optional files
+## The files here
 
-* `pylon.ico`, the application icon. Without it the build uses PyInstaller's
-  default, which works and looks like nothing in particular.
-* `version_info.txt`, the Windows version resource (the Details tab of the file's
-  properties). Without it the executable has no version metadata, which some
-  antivirus heuristics count against it.
+* `pylon.spec`, the PyInstaller build, and `pylon.iss`, the Inno Setup installer.
+* `launcher.py`, the entry point the frozen build runs.
+* `version_info.py`, which generates the Windows version resource from
+  `pyproject.toml` at build time. It is generated rather than committed so that it
+  cannot disagree with the version in `pyproject.toml`; `tests/test_packaging.py`
+  compiles its output, because a typo in it would otherwise surface only near the
+  end of a Windows build.
+* `pylon.ico`, the application icon. Optional: without it the build uses
+  PyInstaller's default, which works and looks like nothing in particular.

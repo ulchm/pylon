@@ -161,7 +161,7 @@ def test_ctrl_c_is_not_a_crash(monkeypatch):
 # --- the build files themselves --------------------------------------------------
 
 @pytest.mark.parametrize("name", ["pylon.spec", "pylon.iss", "launcher.py", "README.md",
-                                  "pylon.ico"])
+                                  "pylon.ico", "version_info.py"])
 def test_the_build_files_are_present(name):
     assert (Path(__file__).resolve().parent.parent / "packaging" / name).is_file()
 
@@ -194,13 +194,88 @@ def test_the_spec_ships_the_overlays_and_the_lazy_imports():
         assert mod in spec, mod
 
 
-def test_the_installer_version_matches_the_package_version():
-    """Two files name the version. They drift, and the symptom is an installer that
-    quietly replaces a newer build with an older one."""
+def test_the_installer_takes_its_version_rather_than_naming_one():
+    """The version used to be written in both pyproject.toml and pylon.iss, and the
+    symptom of the drift was an installer quietly replacing a newer build with an
+    older one. Now only pyproject has it and the installer is handed it, so what
+    needs guarding is that nobody writes a real version back into the script."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    iss = (root / "packaging" / "pylon.iss").read_text()
+
+    defined = re.findall(r'#define\s+AppVersion\s+"([^"]+)"', iss)
+    assert defined == ["0.0.0-dev"], (
+        f"pylon.iss should only carry the fallback version, found {defined}. "
+        f"The real one comes from pyproject.toml via iscc /DAppVersion=.")
+    assert "#ifndef AppVersion" in iss, "the fallback must not override a passed-in one"
+
+
+def test_the_release_workflow_passes_the_version_it_read():
+    """The other half of the same rule: reading the version from pyproject is no use
+    if the installer step does not actually receive it."""
+    root = Path(__file__).resolve().parent.parent
+    wf = (root / ".github" / "workflows" / "release.yml").read_text()
+    assert "/DAppVersion=" in wf, "iscc is not being handed the version"
+    assert "steps.version.outputs.version" in wf
+
+
+# --- the Windows version resource ------------------------------------------------
+#
+# It is Python source that PyInstaller evaluates with its own classes in scope, so a
+# typo in it fails a Windows build minutes in, on a runner, at the end of the slowest
+# job here. Compiling it costs nothing.
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "packaging"))
+from version_info import (
+    read_version,
+    version_info_source,
+    version_quad,
+    write_version_info,
+)
+
+
+def test_the_resource_version_comes_from_pyproject():
     import tomllib
 
     root = Path(__file__).resolve().parent.parent
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
-    iss = (root / "packaging" / "pylon.iss").read_text()
-    want = pyproject["project"]["version"]
-    assert f'#define AppVersion "{want}"' in iss, f"pyproject says {want}"
+    with (root / "pyproject.toml").open("rb") as fh:
+        assert read_version(root) == tomllib.load(fh)["project"]["version"]
+
+
+@pytest.mark.parametrize(("version", "quad"), [
+    ("1.0.0", (1, 0, 0, 0)),
+    ("1.2.3.4", (1, 2, 3, 4)),
+    ("2.1", (2, 1, 0, 0)),
+    # A pre-release tag must not stop a build: Windows wants four numbers, and these
+    # are the ones it can have.
+    ("1.2.3rc1", (1, 2, 3, 0)),
+    ("1.0.0-beta", (1, 0, 0, 0)),
+])
+def test_a_version_becomes_four_numbers_whatever_shape_it_is(version, quad):
+    assert version_quad(version) == quad
+
+
+def test_the_resource_is_valid_python_carrying_the_version():
+    src = version_info_source("1.4.2")
+    # PyInstaller evaluates the file as a single expression, so this is the check
+    # that matters: a stray comma or bracket fails here, not on a Windows runner.
+    compile(src, "version_info.txt", "eval")
+    assert "'1.4.2'" in src
+    assert "(1, 4, 2, 0)" in src
+
+
+def test_the_resource_is_written_where_the_spec_looks_and_git_ignores_it(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "9.9.9"\n')
+    path = Path(write_version_info(tmp_path, read_version(tmp_path)))
+    assert path == tmp_path / "build" / "version_info.txt"
+    assert "'9.9.9'" in path.read_text(encoding="utf-8")
+    # Generated under build/, which is ignored, so it can never be committed and go
+    # stale against pyproject.toml.
+    assert "build/" in (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
+
+
+def test_the_spec_uses_the_generated_resource_and_not_a_committed_one():
+    spec = (Path(__file__).resolve().parent.parent / "packaging" / "pylon.spec").read_text()
+    assert "write_version_info" in spec
+    assert "version=VERSION_FILE" in spec

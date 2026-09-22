@@ -65,10 +65,26 @@ jobs:
           $v = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           "version=$v" >> $env:GITHUB_OUTPUT
 
+      # The runner image has carried Inno Setup for a long time, but a build that
+      # assumes it dies at the very last step of the slowest job in the repository,
+      # after everything else has already been paid for. Checking costs a second.
+      - name: Make sure Inno Setup is available
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup is not on this image; installing it."
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe is still not at $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      # The version is passed in rather than written in the script, so pyproject.toml
+      # stays the only place this project's version is named.
       - name: Build the installer
         shell: pwsh
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\pylon.iss
+          & "$env:ISCC" /DAppVersion=${{ steps.version.outputs.version }} packaging\pylon.iss
 
       - name: Make the portable zip
         shell: pwsh

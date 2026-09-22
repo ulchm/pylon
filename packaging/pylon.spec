@@ -29,6 +29,17 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH).parent
 
+
+# The version resource and the version itself: see packaging/version_info.py, which
+# is a module rather than code in here so that a test can compile its output without
+# running a Windows build to find a typo in it.
+sys.path.insert(0, str(ROOT / "packaging"))
+from version_info import read_version, write_version_info  # noqa: E402
+
+VERSION = read_version(ROOT)
+# Windows only: the resource is a PE feature, and PyInstaller ignores it elsewhere.
+VERSION_FILE = write_version_info(ROOT, VERSION) if sys.platform == "win32" else None
+
 datas = [
     # The browser sources OBS loads: the timing tower, the holding cards, the panel.
     (str(ROOT / "overlays"), "overlays"),
@@ -79,9 +90,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     icon=str(ROOT / "packaging" / "pylon.ico")
          if (ROOT / "packaging" / "pylon.ico").exists() else None,
-    version=str(ROOT / "packaging" / "version_info.txt")
-            if (ROOT / "packaging" / "version_info.txt").exists() and sys.platform == "win32"
-            else None,
+    version=VERSION_FILE,
 )
 
 coll = COLLECT(
