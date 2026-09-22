@@ -134,7 +134,15 @@ control_port = 8882
     Pop-Location
 }
 
-# --- 5. the Desktop shortcut -------------------------------------------------
+# --- 5. OBS's own settings ---------------------------------------------------
+# obs-websocket ships DISABLED, and nothing can talk to OBS until it is on, so this
+# cannot be done over the WebSocket. It edits OBS's config files instead, which
+# means OBS has to be closed; the command refuses and says so if it is not.
+Step "setting OBS up (needs OBS closed)"
+Push-Location $Dest
+try { uv run python -m pylon obs-prepare } finally { Pop-Location }
+
+# --- 6. the Desktop shortcut -------------------------------------------------
 # Starting a broadcast should be a double-click, not a remembered command.
 if (-not $NoShortcut) {
     Step "putting Pylon on the Desktop"

@@ -32,18 +32,32 @@ OBS on your own PC, and nothing leaves it.
 1. **Install it.** Either [from source](#run-it-from-source) (the only way right
    now) or, once builds exist, from the releases page.
 
-2. **Turn on OBS's WebSocket server.** In OBS: *Tools → WebSocket Server
-   Settings → Enable WebSocket server → OK*. This is the only thing you have to
-   switch on by hand, and Pylon reads the password from OBS itself.
+2. **Let Pylon set OBS up**, with **OBS closed**:
+
+   ```
+   uv run pylon obs-prepare        # from a source checkout
+   Pylon.exe obs-prepare           # from an installed copy (the installer offers this)
+   ```
+
+   That switches on OBS's WebSocket server and adds the control panel as a dock.
+   Both are edits to OBS's own settings files, which is the only way to do them:
+   nothing can talk to OBS until its WebSocket is on. OBS rewrites those files when
+   it closes, so it has to be shut; the command checks and tells you if it is not.
+
+   It is additive. An existing password and any docks you already have are kept,
+   and running it twice changes nothing.
+
+   *Rather do it yourself?* In OBS: *Tools → WebSocket Server Settings → Enable
+   WebSocket server → OK*, then *View → Docks → Custom Browser Docks*, name it
+   `Pylon` and paste `http://127.0.0.1:8882/`.
 
 3. **Start Pylon.** From a source checkout that is `uv run pylon studio`; from an
    installed copy it is the desktop shortcut. Either way a console window opens and
    stays open: that is the log, and it is where anything that goes wrong explains
    itself. Leave it running.
 
-4. **Add the control panel to OBS.** In OBS: *View → Docks → Custom Browser
-   Docks*, name it `Pylon`, paste `http://127.0.0.1:8782/`, click Apply. Dock it
-   wherever you like. This is where you check on the show and change settings.
+4. **Find the Pylon dock in OBS**, under *View → Docks*. Drag it wherever suits
+   you. This is where you check on the show and change settings.
 
 5. **Click "Set up OBS"** in that panel. It builds the scene with your sim capture
    and the timing tower on it, plus three holding cards.
@@ -257,10 +271,16 @@ checkout, so a `git pull` updates what they launch.
 
 You do not have to: `uv run pylon studio` in the checkout does the same thing.
 
-### 4. Carry on from step 2 of [Getting started](#getting-started)
+### 4. Let Pylon set OBS up
 
-Turn on OBS's WebSocket server, start Pylon, add the control panel to OBS, and
-click **Set up OBS**.
+With **OBS closed**:
+
+```
+uv run pylon obs-prepare
+```
+
+Then start OBS, start Pylon, and click **Set up OBS** in the Pylon dock. Step 2
+of [Getting started](#getting-started) has the detail.
 
 ### Updating
 

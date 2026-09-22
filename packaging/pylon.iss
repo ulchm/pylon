@@ -63,13 +63,18 @@ Source: "..\dist\Pylon\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{group}\Check my setup"; Filename: "{app}\{#AppExeName}"; Parameters: "doctor"; Comment: "Check OBS, iRacing, the scenes and the ports"
+Name: "{group}\Set up OBS"; Filename: "{app}\{#AppExeName}"; Parameters: "obs-prepare"; Comment: "Switch on obs-websocket and add the control panel (OBS must be closed)"
 Name: "{group}\Settings"; Filename: "{app}\{#AppExeName}"; Parameters: "config --edit"; Comment: "Open the settings file"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
-; Offered, not forced. Someone installing an hour before a race wants to get on with
-; it; someone installing now wants to see whether it works.
-Filename: "{app}\{#AppExeName}"; Parameters: "doctor"; Description: "Check my setup now"; Flags: postinstall nowait skipifsilent
+; Switching obs-websocket on and adding the control panel are edits to OBS's own
+; config FILES, which is the only way to do them: nothing can talk to OBS over its
+; WebSocket until the first of the two has happened. OBS rewrites those files when
+; it closes, so they have to be made while it is shut, which during an install it
+; almost always is. `obs-prepare` refuses and says so if it is not.
+Filename: "{app}\{#AppExeName}"; Parameters: "obs-prepare"; Description: "Set up OBS for me (do this with OBS closed)"; Flags: postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Parameters: "doctor"; Description: "Check my setup now"; Flags: postinstall nowait skipifsilent unchecked
 Filename: "{#AppURL}#getting-started"; Description: "Read the five-minute setup guide"; Flags: postinstall nowait shellexec skipifsilent unchecked
 
 [UninstallDelete]

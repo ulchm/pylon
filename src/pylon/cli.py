@@ -8,6 +8,7 @@ The two commands almost everyone uses:
 Setting up and checking:
 
     pylon config [--edit|--path]    show or open the settings file
+    pylon obs-prepare               switch obs-websocket on and add the control panel
     pylon doctor                    check OBS, iRacing, the scenes and the ports
 
 The workers, which the studio runs for you:
@@ -306,6 +307,22 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(f"! {problem}")
     print(to_toml(cfg), end="")
     return 0
+
+
+def cmd_obs_prepare(args: argparse.Namespace) -> int:
+    """Switch on obs-websocket and add the control panel, by editing OBS's own files.
+
+    The half of setting up OBS that cannot be done over the WebSocket, because it is
+    what makes the WebSocket reachable in the first place.
+    """
+    from .obs.prepare import prepare_obs
+    from .settings import SHOW
+
+    rep = prepare_obs(panel_url=args.panel_url or SHOW.control_url(),
+                      panel_title=args.panel_title, force=args.force)
+    for line in rep.lines:
+        print(line)
+    return 0 if rep.ok else 1
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -738,6 +755,18 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("--edit", action="store_true", help="open it in your text editor")
     cf.add_argument("--path", action="store_true", help="print only where it is")
     cf.set_defaults(func=cmd_config)
+
+    op = sub.add_parser("obs-prepare",
+                        help="switch on obs-websocket and add the control panel "
+                             "(OBS must be CLOSED)")
+    op.add_argument("--panel-url", dest="panel_url", default=None,
+                    help="the dock's URL (default: this install's control panel)")
+    op.add_argument("--panel-title", dest="panel_title", default="Pylon",
+                    help="what the dock is called in OBS")
+    op.add_argument("--force", action="store_true",
+                    help="edit even with OBS running. It will undo the change when "
+                         "it closes, so this is for testing only")
+    op.set_defaults(func=cmd_obs_prepare)
 
     dc = sub.add_parser("doctor", help="check OBS, iRacing, the scenes and the ports")
     dc.add_argument("--no-sim", action="store_true",
