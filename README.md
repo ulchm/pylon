@@ -96,9 +96,12 @@ the sim's cameras, and they would fight over the ports.
 
 What Pylon does to stay out of the way:
 
-* **Every scene it makes carries your show's name**, the programme scene included.
-  Set a name in Settings before you click "Set up OBS" and it will never touch a
-  scene belonging to anything else.
+* **Every scene it makes carries your show's name**, the programme scene included,
+  and so does every source inside those scenes. OBS source names must be unique
+  across a whole scene collection rather than within one scene, so naming the scenes
+  alone is not enough to keep two shows apart. Set a name in Settings before you
+  click "Set up OBS" and it will never touch a scene or a source belonging to
+  anything else.
 * **It leaves OBS's encoder settings alone** unless you ask it to set your stream
   destination too. Those settings live in the OBS profile, outside any one scene
   collection, so writing them uninvited would reach past our own scenes.

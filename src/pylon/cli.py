@@ -35,7 +35,7 @@ import argparse
 
 from .config import load as load_config
 from .director import DirectorConfig, ReplayConfig
-from .obs import PROGRAM_SCENE, OutputSettings, SceneConfig
+from .obs import OutputSettings, SceneConfig
 from .settings import SHOW
 from .telemetry import PlaybackSource, RecordingWriter, SyntheticSource
 from .telemetry.constants import SessionFlag
@@ -444,6 +444,7 @@ def cmd_bridge(args: argparse.Namespace) -> int:
 
 
 def cmd_obs_setup(args: argparse.Namespace) -> int:
+    from .config import load as load_config
     from .obs import (
         OutputSettings,
         build_program_scene,
@@ -453,8 +454,23 @@ def cmd_obs_setup(args: argparse.Namespace) -> int:
         ensure_stream_target,
     )
     from .settings import stream_settings
+    from .show.obssetup import program_scene, scene_prefix, source_prefix
 
-    want_output = None if args.no_output else OutputSettings(
+    # The names come from the operator's config, exactly as `live --obs-scenes` reads
+    # them, so the scenes this builds are the ones the director later cuts to. They
+    # were argparse constants once, and on a PC with a second broadcaster that meant
+    # provisioning reached straight into the other show's programme scene.
+    cfg = load_config()
+    scene = args.scene if args.scene is not None else program_scene(cfg)
+    prefix = args.scene_prefix if args.scene_prefix is not None else scene_prefix(cfg)
+    sources = source_prefix(cfg)
+
+    # The encode is pinned ONLY when we also set the destination. Encoder settings
+    # live in the OBS PROFILE, outside any scene collection, so writing them because
+    # somebody ran obs-setup reaches every other show on the machine. A Custom RTMP
+    # destination still needs them, which is the case this exists for.
+    stream = stream_settings()
+    want_output = None if (args.no_output or not stream) else OutputSettings(
         bitrate=args.bitrate, keyint_sec=args.keyint, preset=args.nvenc_preset)
 
     def print_output(rep: dict) -> None:
@@ -479,17 +495,18 @@ def cmd_obs_setup(args: argparse.Namespace) -> int:
                 print(f"  ! {w}")
         return 1
 
-    report = build_program_scene(cl, scene=args.scene,
+    report = build_program_scene(cl, scene=scene,
                                  overlay_url=args.overlay_url,
                                  game_window=args.game_window or "",
                                  capture_crop=args.capture_crop,
+                                 source_prefix=sources,
                                  width=args.width, height=args.height, fps=args.fps)
     # Holding scenes are their own scenes, not part of Program, so they are
     # provisioned separately rather than folded into build_program_scene.
-    card_kw = {} if args.scene_prefix is None else {"prefix": args.scene_prefix}
     cards = [] if args.no_cards else ensure_cards(cl, base_url=args.cards_url,
                                                   width=args.width, height=args.height,
-                                                  **card_kw)
+                                                  prefix=prefix, source_prefix=sources,
+                                                  warnings=report["warnings"])
     if report["game"]:
         how, blank = "local capture", "the sim is running and fullscreen"
     else:
@@ -505,7 +522,6 @@ def cmd_obs_setup(args: argparse.Namespace) -> int:
     print(f"  holding scenes   : {', '.join(cards) or 'none'}")
     # The destination is provisioned with the scenes so a rebuilt OBS is a
     # one-command job; the key comes from the config and is never printed.
-    stream = stream_settings()
     if stream:
         st = ensure_stream_target(cl, server=stream.server, key=stream.key)
         state = "set" if st["changed"] else "already set"
@@ -833,7 +849,10 @@ def build_parser() -> argparse.ArgumentParser:
     # obs-setup builds is the one `live --obs-scenes` cuts back to. They were
     # two literals once, and the director spent a show unable to leave the
     # holding card because OBS had "Program" and it wanted the other name.
-    os_.add_argument("--scene", default=PROGRAM_SCENE)
+    os_.add_argument("--scene", default=None,
+                     help="the programme scene to build (default: named from the show "
+                          "tag in config.toml, which is what keeps two broadcasters on "
+                          "one PC apart)")
     os_.add_argument("--game-window", default=None, dest="game_window",
                      help="pin game capture to a window, as title:class:exe "
                           "(default: whatever is fullscreen)")

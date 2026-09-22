@@ -132,6 +132,22 @@ def test_a_named_show_never_looks_at_the_unnamed_programme_scene():
     assert program_scene(Config()) == "iRacing - Broadcast"
 
 
+def test_the_sources_inside_those_scenes_are_named_apart_as_well():
+    """Separating the scenes is not enough on its own: OBS input names are unique
+    across the whole scene collection, so an untagged "Overlay" is one object both
+    shows would own, and the second to provision gets "a source already exists by
+    that input name" and builds nothing."""
+    from pylon.config import ShowConfig
+    from pylon.show.obssetup import source_prefix
+
+    assert source_prefix(Config(show=ShowConfig(tag="TNR"))) == "TNR - "
+    assert source_prefix(Config(show=ShowConfig(name="Thursday Night Racing"))) \
+        == "Thursday Night Racing - "
+    # A single-broadcaster PC keeps the plain names its OBS already holds: renaming
+    # them to fix a collision it does not have would orphan the scene items.
+    assert source_prefix(Config()) == ""
+
+
 def test_a_transition_obs_does_not_have_is_reported_before_it_fails_silently():
     """A scene switch naming a transition OBS has never heard of is the kind of
     failure that only shows up as a cut that did not happen, mid-race."""

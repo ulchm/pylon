@@ -74,6 +74,22 @@ def scene_prefix(cfg: Config) -> str:
     return f"{tag} - " if tag else "Pylon - "
 
 
+def source_prefix(cfg: Config) -> str:
+    """How the SOURCES inside those scenes are named.
+
+    Separate from `scene_prefix` because the fallbacks differ. OBS input names are
+    unique across a whole scene collection, so two shows with properly separated
+    scenes still collide on the sources inside them, and the second one to provision
+    gets "a source already exists by that input name" and builds nothing. The tag
+    fixes that. With no tag at all there is no second show to avoid, and the plain
+    names are what every existing install already has in OBS, so it stays empty:
+    renaming a working operator's sources to fix a collision they do not have would
+    orphan the scene items pointing at them.
+    """
+    tag = (cfg.show.tag or cfg.show.name).strip()
+    return f"{tag} - " if tag else ""
+
+
 def setup_obs(cfg: Config | None = None, *, connect=None,
               game_window: str = "", capture_crop: str = "") -> SetupReport:
     """Provision OBS to broadcast this show. Never raises; the report says what happened."""
@@ -101,12 +117,15 @@ def setup_obs(cfg: Config | None = None, *, connect=None,
         rep.say(f"({e})")
         return rep
 
+    sources = source_prefix(cfg)
     report = build_program_scene(cl, scene=program_scene(cfg),
                                  overlay_url=SHOW.overlay_page_url(),
                                  game_window=game_window, capture_crop=capture_crop,
+                                 source_prefix=sources,
                                  width=width, height=height, fps=SHOW.fps)
     cards = ensure_cards(cl, base_url=SHOW.cards_url(), width=width, height=height,
-                         prefix=scene_prefix(cfg))
+                         prefix=scene_prefix(cfg), source_prefix=sources,
+                         warnings=report["warnings"])
     rep.scenes = [report["scene"], *cards]
     rep.say(f"Scene '{report['scene']}' is ready at {width}x{height}.")
     rep.say(f"  video     {report['video'] or 'not created'}"

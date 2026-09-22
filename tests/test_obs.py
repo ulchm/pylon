@@ -363,3 +363,99 @@ def test_a_refused_stream_target_warns_and_says_why():
     report = ensure_stream_target(Streaming(), server=_RS, key=_KEY)
     assert not report["changed"]
     assert any("stop it and run obs-setup again" in w for w in report["warnings"])
+
+
+# --- two broadcasters on one PC -------------------------------------------------
+#
+# OBS input names are unique across a whole scene collection, not per scene. Naming
+# only the SCENES after the show therefore separates two broadcasters right up until
+# the moment either one tries to create a source, and then the second one to run gets
+# request error 601 and provisions nothing.
+
+
+def test_sources_carry_the_show_tag_not_just_the_scenes():
+    fake = FakeClient()
+    build_program_scene(fake, scene="PylonTest - Broadcast",
+                        source_prefix="PylonTest - ")
+
+    made = [c[2] for c in fake.calls if c[0] == "create_input"]
+    assert made == [f"PylonTest - {GAME_SOURCE_NAME}", f"PylonTest - {OVERLAY_SOURCE_NAME}"]
+
+
+def test_card_sources_carry_the_show_tag_too():
+    fake = FakeClient()
+    ensure_cards(fake, prefix="PylonTest - ", source_prefix="PylonTest - ")
+
+    sources = [c[2] for c in fake.calls if c[0] == "create_input"]
+    assert sources == [f"PylonTest - Card - {label}" for label, _ in CARDS]
+
+
+def test_an_unnamed_show_keeps_the_plain_source_names():
+    """The ordinary single-broadcaster install has no second show to avoid, and its
+    OBS already holds these names: renaming them would orphan the scene items."""
+    fake = FakeClient()
+    build_program_scene(fake, scene="Program")
+
+    made = [c[2] for c in fake.calls if c[0] == "create_input"]
+    assert made == [GAME_SOURCE_NAME, OVERLAY_SOURCE_NAME]
+
+
+def test_a_name_another_show_owns_is_reported_not_raised():
+    """The failure this stops: obs-setup dying in a traceback partway through and
+    leaving a programme scene with nothing in it."""
+    class Taken(FakeClient):
+        def create_input(self, scene, name, kind, settings, enabled):
+            if name == GAME_SOURCE_NAME:
+                raise RuntimeError("code 601. With message: A source already exists "
+                                   "by that input name")
+            return super().create_input(scene, name, kind, settings, enabled)
+
+    fake = Taken()
+    report = build_program_scene(fake, scene="Program")
+
+    # the run finishes, says which name it could not have, and still adds the rest
+    assert any("601" in w and GAME_SOURCE_NAME in w for w in report["warnings"])
+    assert any("tag in config.toml" in w for w in report["warnings"])
+    assert OVERLAY_SOURCE_NAME in [c[2] for c in fake.calls if c[0] == "create_input"]
+    assert ("set_current_program_scene", "Program") in fake.calls
+
+
+def test_cards_survive_a_name_another_show_owns():
+    class Taken(FakeClient):
+        def create_input(self, scene, name, kind, settings, enabled):
+            raise RuntimeError("code 601. With message: A source already exists "
+                               "by that input name")
+
+    warnings: list[str] = []
+    made = ensure_cards(Taken(), warnings=warnings)
+
+    assert made == card_scene_names()          # the scenes are still there
+    assert len(warnings) == len(CARDS)         # and each says what is missing from it
+
+
+def test_the_programme_scene_is_not_cut_while_obs_is_on_air():
+    """obs-setup is something you might run on a PC that is mid-broadcast, and the
+    scene switch would put a half-built programme on the other show's air."""
+    class OnAir(FakeClient):
+        def get_stream_status(self):
+            return _Resp(output_active=True)
+
+        def get_record_status(self):
+            return _Resp(output_active=False)
+
+    fake = OnAir()
+    report = build_program_scene(fake, scene="Program")
+
+    assert "set_current_program_scene" not in _ops(fake)
+    assert any("streaming or recording" in w for w in report["warnings"])
+
+
+def test_the_overlay_url_is_reapplied_to_a_source_that_already_exists():
+    """"Change the config and run obs-setup again" is the documented way to apply a
+    port change, and a browser source left on the old port just serves nothing."""
+    fake = FakeClient(scenes=["Program"], items=[GAME_SOURCE_NAME, OVERLAY_SOURCE_NAME])
+    build_program_scene(fake, scene="Program", overlay_url="http://localhost:9999/x.html")
+
+    applied = [c for c in fake.calls
+               if c[0] == "set_input_settings" and c[1] == OVERLAY_SOURCE_NAME]
+    assert applied and applied[0][2]["url"] == "http://localhost:9999/x.html"

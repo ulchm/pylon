@@ -184,7 +184,30 @@ def _apply_capture_crop(cl, scene: str, source: str, want: tuple[int, int],
     report["crop"] = {"source": [src_w, src_h], "kept": [want[0], want[1]], **crop}
 
 
+def _create_input(cl, scene: str, name: str, kind: str, settings: dict,
+                  warnings: list[str] | None = None) -> bool:
+    """Create one input in `scene`, reporting rather than raising. True if it was made.
+
+    OBS input names are unique across the WHOLE scene collection, not per scene, so a
+    name another show already owns comes back as request error 601 and used to end the
+    run in a traceback partway through, leaving a programme scene with nothing in it.
+    That is not hypothetical: on the rig this was cut from, the other broadcaster's
+    sources are called "Overlay" and "iRacing (Capture)" too.
+    """
+    try:
+        cl.create_input(scene, name, kind, settings, True)
+        return True
+    except Exception as e:  # noqa: BLE001 - a named conflict beats a half-built OBS
+        if warnings is not None:
+            warnings.append(
+                f"could not create '{name}' in '{scene}': {e}. Something else in this "
+                f"scene collection already uses that name; give this show its own tag "
+                f"in config.toml, or rename the other source in OBS.")
+        return False
+
+
 def ensure_cards(cl, *, base_url: str = CARDS_URL, prefix: str = SCENE_PREFIX,
+                 source_prefix: str = "", warnings: list[str] | None = None,
                  width: int = _WIDTH, height: int = _HEIGHT) -> list[str]:
     """Create the holding scenes (idempotent). Returns the scene names made or kept.
 
@@ -209,12 +232,15 @@ def ensure_cards(cl, *, base_url: str = CARDS_URL, prefix: str = SCENE_PREFIX,
             "width": width, "height": height,
             "shutdown": True, "restart_when_active": True,
         }
-        # named off the LABEL, not the scene: re-prefixing scenes to reorder
-        # them in OBS must not orphan the source inside each one
-        source = f"Card - {label}"
+        # Named off the LABEL, not the scene, so re-prefixing scenes to reorder them
+        # in OBS does not orphan the source inside each one. The show's tag is still
+        # carried, because the scene names alone do not keep two shows apart: input
+        # names are collection-wide, so an untagged "Card - Starting Soon" is one
+        # object both shows would own.
+        source = f"{source_prefix}Card - {label}"
         items = {i["sourceName"] for i in cl.get_scene_item_list(scene).scene_items}
         if source not in items:
-            cl.create_input(scene, source, browser_kind, settings, True)
+            _create_input(cl, scene, source, browser_kind, settings, warnings)
         else:
             cl.set_input_settings(source, settings, True)
         made.append(scene)
@@ -254,18 +280,41 @@ def ensure_stream_target(cl, *, server: str, key: str) -> dict:
     return report
 
 
+def _on_air(cl) -> bool:
+    """Whether OBS is streaming or recording right now.
+
+    Asked before cutting the programme scene, because provisioning is something you
+    might run on a PC that is mid-broadcast: this product was cut from a broadcaster
+    that still runs on its author's rig, and switching the scene there puts a
+    half-built programme on somebody else's air. Unknown counts as off air, so an OBS
+    that cannot answer behaves the way it always did.
+    """
+    try:
+        return bool(cl.get_stream_status().output_active
+                    or cl.get_record_status().output_active)
+    except Exception:  # noqa: BLE001 - cannot tell, so behave as before
+        return False
+
+
 def build_program_scene(cl, *, scene: str = PROGRAM_SCENE,
                         overlay_url: str = DEFAULT_OVERLAY_URL,
                         game_window: str = "",
                         capture_crop: str = "center",
+                        source_prefix: str = "",
                         width: int = _WIDTH, height: int = _HEIGHT,
                         fps: int = SHOW.fps) -> dict:
     """Create/refresh the Program scene. Returns a small report + warnings.
 
     `capture_crop` is "center", "none" or "WxH"; see `_crop_target`.
+
+    `source_prefix` is the show's tag, and it goes on the SOURCES as well as the
+    scene, because OBS input names are unique per scene collection rather than per
+    scene. Empty (the single-broadcaster default) leaves the plain names.
     """
     report: dict = {"scene": scene, "video": None, "game": None,
                     "overlay": None, "crop": None, "warnings": []}
+    game_source = f"{source_prefix}{GAME_SOURCE_NAME}"
+    overlay_source = f"{source_prefix}{OVERLAY_SOURCE_NAME}"
 
     try:
         cl.set_video_settings(fps, 1, width, height, width, height)
@@ -288,9 +337,9 @@ def build_program_scene(cl, *, scene: str = PROGRAM_SCENE,
     # Video first, so it sits at the bottom of the stack; the overlay goes on top.
     if game_kind:
         report["video"] = report["game"] = game_kind
-        if GAME_SOURCE_NAME not in items:
-            cl.create_input(scene, GAME_SOURCE_NAME, game_kind,
-                            _game_settings(game_window), True)
+        if game_source not in items:
+            _create_input(cl, scene, game_source, game_kind,
+                          _game_settings(game_window), report["warnings"])
         if not game_window:
             report["warnings"].append(
                 "Game capture is on any-fullscreen - fine while the sim owns the screen, "
@@ -306,7 +355,7 @@ def build_program_scene(cl, *, scene: str = PROGRAM_SCENE,
                 f"capture-crop {capture_crop!r} is not 'center', 'none' or WxH - "
                 f"leaving the capture uncropped.")
         if want:
-            _apply_capture_crop(cl, scene, GAME_SOURCE_NAME, want, (width, height), report)
+            _apply_capture_crop(cl, scene, game_source, want, (width, height), report)
     else:
         report["warnings"].append(
             "No game or window capture kind found - is this OBS running on Windows, "
@@ -314,11 +363,23 @@ def build_program_scene(cl, *, scene: str = PROGRAM_SCENE,
 
     if browser_kind:
         report["overlay"] = overlay_url
-        if OVERLAY_SOURCE_NAME not in items:
-            cl.create_input(scene, OVERLAY_SOURCE_NAME, browser_kind,
-                            {"url": overlay_url, "width": width, "height": height}, True)
+        overlay_settings = {"url": overlay_url, "width": width, "height": height}
+        if overlay_source not in items:
+            _create_input(cl, scene, overlay_source, browser_kind, overlay_settings,
+                          report["warnings"])
+        else:
+            # Re-applied on every run, like the crop: the URL is built from the ports
+            # in config.toml, and "change the config and run obs-setup again" is the
+            # documented way to apply a change. A source left on the old port loads
+            # nothing, which looks like a broken overlay rather than a stale setting.
+            cl.set_input_settings(overlay_source, overlay_settings, True)
     else:
         report["warnings"].append("No browser input kind found - is the browser plugin loaded?")
 
-    cl.set_current_program_scene(scene)
+    if _on_air(cl):
+        report["warnings"].append(
+            "OBS is streaming or recording, so the programme scene was left where it "
+            "is; cut to this scene by hand once the current show is off air.")
+    else:
+        cl.set_current_program_scene(scene)
     return report
