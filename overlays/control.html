@@ -182,8 +182,8 @@
 
   <button id="save" class="wide">Save settings</button>
   <div id="saveNote" class="hint"></div>
-  <div class="hint">Saved settings reach the overlay when it restarts: use the restart
-    button on the timing tower's row.</div>
+  <div class="hint">A saved setting takes effect when the part that uses it restarts.
+    Save says which restart button to press.</div>
   <div class="path" id="cfgPath"></div>
 </section>
 
@@ -341,6 +341,16 @@
     ['obs_stream_key', 'obs', 'stream_key', 'text'],
   ];
 
+  // Each part reads the settings file once, when it starts, so a save reaches a
+  // running show only through a restart. This says which one. Replays and OBS are
+  // decided when Pylon itself starts, so no single restart button picks them up.
+  function restartFor(table, key) {
+    if (table === 'show' || table === 'look') return 'Timing tower';
+    if (table === 'director' && key !== 'replays') return 'Camera director';
+    return null;
+  }
+  let loaded = {};
+
   function showProblems(probs) {
     const box = $('settingsProblems');
     box.classList.toggle('hidden', !probs || probs.length === 0);
@@ -359,6 +369,7 @@
       return;
     }
     const s = doc.settings || {};
+    loaded = s;
     for (const [id, table, key, kind] of FIELDS) {
       const el = $(id);
       const v = (s[table] || {})[key];
@@ -405,9 +416,23 @@
       });
       const doc = await r.json();
       if (!r.ok) throw new Error(doc.error || r.status);
-      note.textContent = 'saved';
+      const rows = new Set();
+      let whole = false;
+      for (const [table, values] of Object.entries(patch)) {
+        for (const [key, v] of Object.entries(values)) {
+          const was = (loaded[table] || {})[key];
+          const now = Array.isArray(was) ? v.split(',').map((x) => x.trim()).filter(Boolean) : v;
+          if (JSON.stringify(now) === JSON.stringify(was)) continue;
+          const row = restartFor(table, key);
+          if (row) rows.add(row); else whole = true;
+        }
+      }
+      const todo = [...rows].map((r) => 'restart the ' + r + ' row');
+      if (whole) todo.push('restart Pylon for replays and OBS');
+      note.textContent = todo.length ? 'saved: ' + todo.join(', ') + ' to apply' : 'saved';
       note.className = 'hint saved';
       showProblems(doc.problems);
+      await loadSettings();
     } catch (e) {
       note.textContent = 'could not save: ' + e.message;
       note.className = 'hint problem';

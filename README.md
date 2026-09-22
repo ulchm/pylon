@@ -159,9 +159,23 @@ The settings that matter most:
 | **Favourite car numbers** | Cars that get more screen time than their position earns |
 | **Cameras** | `tv` (trackside), `onboard` (in-car) or `wide` (helicopter and blimp) |
 | **Replays** | Roll an instant replay after a crash |
+| **Shortest shot** | The director never cuts sooner than this, except for a crash. It is a floor, not a length: a good fight is held well past it |
 
 Your settings live outside the program folder, so upgrading Pylon never touches
 them.
+
+### Changing settings during a show
+
+Each part of Pylon reads the settings when it starts, so saving does not change a
+show that is already running. After you save, the panel tells you which restart
+button to press:
+
+* **Name, round, colour, logo, tower, corner bug:** restart the **Timing tower**.
+* **Cameras, favourites, shortest shot:** restart the **Camera director**.
+* **Replays and anything under OBS:** close Pylon and start it again.
+
+Restarting a row does not stop the broadcast. A director restart leaves the camera
+where it is for a moment while it reconnects.
 
 ### Favourites
 
