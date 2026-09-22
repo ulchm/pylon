@@ -539,7 +539,9 @@ def test_the_dock_reports_a_starting_worker_as_starting():
 def test_default_workers_are_in_dependency_order():
     ws = default_workers(python="PY")
     assert [w.name for w in ws] == ["bridge", "overlay", "director"]
-    assert ws[0].port == 8779 and ws[-1].port is None
+    # Against the SETTINGS, not a hardcoded number: an operator's config moves these,
+    # and what this test is about is the order and the portless director.
+    assert ws[0].port == SHOW.bridge_port and ws[-1].port is None
 
 
 def test_every_worker_runs_under_the_interpreter_it_was_given():
