@@ -287,7 +287,13 @@ def load(path: Path | None = None) -> Config:
     except OSError:
         return Config()
     try:
-        doc = tomllib.loads(raw.decode("utf-8"))
+        # utf-8-sig, not utf-8: a great many Windows editors, PowerShell's own
+        # Set-Content -Encoding UTF8 among them, write a byte-order mark. Plain
+        # utf-8 decodes it to a \ufeff that tomllib then rejects with "Invalid
+        # statement (at line 1, column 1)", and the whole file is silently
+        # discarded for a character nobody can see. Found on a real Windows box,
+        # 2026-09-22, the first time this config was written by PowerShell.
+        doc = tomllib.loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         cfg = Config()
         cfg.problems.append(f"{path} could not be read ({e}); running on the defaults")

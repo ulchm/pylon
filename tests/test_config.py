@@ -61,6 +61,20 @@ def test_a_file_that_does_not_parse_reports_it_and_runs_on_the_defaults(tmp_path
     assert "could not be read" in cfg.problems[0]
 
 
+def test_a_byte_order_mark_does_not_throw_the_whole_file_away(tmp_path):
+    """Windows editors write one, PowerShell's `Set-Content -Encoding UTF8` writes one,
+    and it is invisible. Decoded as plain utf-8 it becomes a \ufeff that tomllib
+    rejects at line 1 column 1, and every setting in the file is silently discarded.
+
+    Found on a real Windows box the first time this config was written by PowerShell.
+    """
+    p = tmp_path / "config.toml"
+    p.write_bytes("\ufeff[show]\nname = \"Thursday Night Racing\"\n".encode("utf-8"))
+    cfg = load(p)
+    assert cfg.show.name == "Thursday Night Racing"
+    assert cfg.problems == []
+
+
 def test_a_value_of_the_wrong_type_is_reported_and_the_default_stands(tmp_path):
     p = tmp_path / "config.toml"
     p.write_text('[advanced]\nbridge_port = "not a number"\n\n[look]\ntower = "maybe"\n')

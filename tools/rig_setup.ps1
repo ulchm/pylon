@@ -117,7 +117,7 @@ bridge_port = 8879
 overlay_http_port = 8878
 overlay_ws_port = 8877
 control_port = 8882
-"@ | Set-Content -Path $cfgPath -Encoding UTF8
+"@ | Set-Content -Path $cfgPath -Encoding ascii   # NOT UTF8: PowerShell 5 writes a BOM
     }
 
     # --- 4. the gate -----------------------------------------------------------
