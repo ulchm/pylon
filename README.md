@@ -34,13 +34,24 @@ sessions and one for after the chequer, and Pylon cuts to them on its own.*
 
 **You need:** Windows, iRacing, and [OBS](https://obsproject.com/) 28 or newer.
 
-> **There is no installer yet.** Pylon runs from a source checkout today, which
-> takes about five minutes and two commands. [Run it from source](#run-it-from-source)
-> has the whole thing, then come back here at step 2. When there is a build, step 1
-> becomes downloading it.
+1. **Install it.** Download the latest release:
 
-1. **Install it.** Either [from source](#run-it-from-source) (the only way right
-   now) or, once builds exist, from the releases page.
+   * **[Pylon-Setup-x.y.z.exe](https://github.com/ulchm/pylon/releases/latest)**, the
+     installer. It puts Pylon in your user account (no administrator, no UAC prompt),
+     makes the Desktop and Start menu shortcuts, and offers to set OBS up at the end.
+   * **Pylon-x.y.z-portable.zip**, if you would rather not run an installer. Unzip it
+     anywhere and run `Pylon.exe` from the folder. Nothing is written outside it
+     except your settings, which live in `%LOCALAPPDATA%\Pylon`.
+
+   > **Windows will warn you about it**, with "Windows protected your PC". Pylon is
+   > not signed, because a certificate costs money every year to give away free
+   > software. Click **More info**, then **Run anyway**. If you would rather not take
+   > our word for it, [build it yourself](#run-it-from-source): it is the same two
+   > commands we run, and the release is built in the open by
+   > [a GitHub Actions workflow](.github/workflows/release.yml) you can read.
+
+   Developers, and anyone who wants to change it, want
+   [Run it from source](#run-it-from-source) instead.
 
 2. **Let Pylon set OBS up**, with **OBS closed**:
 
